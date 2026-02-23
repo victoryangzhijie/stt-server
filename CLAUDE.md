@@ -62,10 +62,10 @@ The global `_infer_lock` in `backends/qwen3.py` serializes all inference calls b
 
 - **Async/sync bridge**: FastAPI async on the outside, sync vLLM inference in a thread, connected by janus queues. The worker reads `in_q_sync` and writes `out_q_sync`.
 - **Backend singleton**: `backends/qwen3.py` uses a module-level `_asr_model` (`Qwen3ASRModel`) with double-checked locking via `_asr_lock`. The model loads once on first connection, shared across all connections. All inference calls (`streaming_transcribe`, `finish_streaming_transcribe`) are serialized via `_infer_lock`.
-- **Streaming inference**: `qwen-asr` handles chunked inference internally. Audio is fed via `streaming_transcribe()` in `push_audio()` — most calls just buffer (microseconds), inference triggers every `chunk_size_sec` (default 2s). `get_partial()` is a pure read of `state.text`. Per-connection `ASRStreamingState` is created in `configure()` and rebuilt in `reset_segment()`.
+- **Streaming inference**: `qwen-asr` handles chunked inference internally. Audio is fed via `streaming_transcribe()` in `push_audio()` — most calls just buffer (microseconds), inference triggers every `chunk_size_sec` (default 0.5s). `get_partial()` is a pure read of `state.text`. Per-connection `ASRStreamingState` is created in `configure()` and rebuilt in `reset_segment()`.
 - **Lazy imports**: `qwen_asr` and `numpy` are imported inside functions in `qwen3.py`, so `STT_BACKEND=mock` works without GPU dependencies installed.
 - **Backpressure**: Queue overflow → error event (code 1008) → connection closed. Worker also stops if output queue is full.
-- **VAD**: Energy-based RMS on PCM16LE samples via `struct.unpack` (no numpy). State machine tracks `_in_speech` / `_silence_ms_accum` / `_endpoint_fired`.
+- **VAD**: Energy-based RMS on PCM16LE samples using numpy. State machine tracks `_in_speech` / `_silence_ms_accum` / `_endpoint_fired`.
 
 ## qwen-asr Streaming API
 
@@ -75,7 +75,7 @@ The Qwen3 backend uses `qwen-asr` package for streaming transcription:
 from qwen_asr import Qwen3ASRModel
 
 asr = Qwen3ASRModel.LLM(model="Qwen/Qwen3-ASR-1.7B", **vllm_kwargs)
-state = asr.init_streaming_state(chunk_size_sec=2.0, unfixed_chunk_num=2, unfixed_token_num=5)
+state = asr.init_streaming_state(chunk_size_sec=0.5, unfixed_chunk_num=2, unfixed_token_num=5)
 
 # Feed audio incrementally (buffers internally, infers every chunk_size_sec)
 asr.streaming_transcribe(float32_audio, state)
@@ -93,7 +93,7 @@ asr.finish_streaming_transcribe(state)
 
 ## Configuration
 
-All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACKEND` (mock/qwen3), `STT_VLLM_MODEL`, `STT_VAD_THRESHOLD`, `STT_VAD_SILENCE_MS`, `STT_STREAMING_CHUNK_SIZE_SEC`, `STT_STREAMING_UNFIXED_CHUNK_NUM`, `STT_STREAMING_UNFIXED_TOKEN_NUM`.
+All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACKEND` (mock/qwen3), `STT_VLLM_MODEL`, `STT_VAD_THRESHOLD`, `STT_VAD_SILENCE_MS` (default 500ms), `STT_STREAMING_CHUNK_SIZE_SEC` (default 0.5s), `STT_STREAMING_UNFIXED_CHUNK_NUM`, `STT_STREAMING_UNFIXED_TOKEN_NUM`.
 
 ## Testing Notes
 
