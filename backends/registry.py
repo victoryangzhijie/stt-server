@@ -7,6 +7,7 @@ from backends.base import ASRBackend
 _BACKENDS: dict[str, str] = {
     "qwen3": "backends.qwen3.Qwen3Backend",
     "mock": "backends.mock.MockBackend",
+    "nemo": "backends.nemo.NemoBackend",
 }
 
 

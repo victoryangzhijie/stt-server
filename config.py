@@ -45,5 +45,12 @@ class Settings(BaseSettings):
     streaming_unfixed_chunk_num: int = 2
     streaming_unfixed_token_num: int = 5
 
+    # NeMo backend config
+    nemo_model: str = "stt_en_fastconformer_transducer_large_streaming"
+    nemo_chunk_size: float = 0.34
+    nemo_shift_size: float = 0.34
+    nemo_left_chunks: int = 2
+    nemo_vad_threshold: float = 0.5
+
 
 settings = Settings()
