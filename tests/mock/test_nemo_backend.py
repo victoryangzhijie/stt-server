@@ -110,3 +110,96 @@ class TestConfigureAndClose:
         backend = _make_backend()
         backend.close()
         backend.close()
+
+
+class TestPushAudioAndPartial:
+    def setup_method(self):
+        self.mock_nemo = _make_mock_nemo_model()
+        self.mock_vad = _make_mock_vad_model()
+        self.mock_streaming_buf = _make_mock_streaming_buffer()
+        self.nemo_patcher = patch(
+            "backends.nemo._get_nemo_model", return_value=self.mock_nemo
+        )
+        self.vad_patcher = patch(
+            "backends.nemo._get_vad_base_model", return_value=self.mock_vad
+        )
+        self.buf_patcher = patch(
+            "backends.nemo.CacheAwareStreamingAudioBuffer",
+            return_value=self.mock_streaming_buf,
+        )
+        self.nemo_patcher.start()
+        self.vad_patcher.start()
+        self.buf_patcher.start()
+
+    def teardown_method(self):
+        self.nemo_patcher.stop()
+        self.vad_patcher.stop()
+        self.buf_patcher.stop()
+
+    def test_push_audio_accumulates_float32(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        pcm = _make_pcm_tone(1600, amplitude=5000)
+        backend.push_audio(pcm)
+
+        assert backend._streaming.audio_buffer.dtype == np.float32
+        assert len(backend._streaming.audio_buffer) == 1600
+
+        expected = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        np.testing.assert_array_almost_equal(
+            backend._streaming.audio_buffer, expected
+        )
+
+    def test_push_audio_empty_is_noop(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend.push_audio(b"")
+        assert len(backend._streaming.audio_buffer) == 0
+
+    def test_push_audio_also_fills_vad_buffer(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(1600))
+        assert len(backend._vad_buffer) == 1600
+
+    def test_push_audio_triggers_inference_at_chunk_size(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        chunk_samples = backend._streaming.chunk_size_samples
+
+        # Push less than chunk — no inference
+        backend.push_audio(_make_pcm_tone(chunk_samples - 100))
+        self.mock_nemo.conformer_stream_step.assert_not_called()
+
+        # Push remaining — should trigger inference
+        backend.push_audio(_make_pcm_tone(200))
+        self.mock_nemo.conformer_stream_step.assert_called_once()
+
+    def test_push_audio_updates_current_text(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        chunk_samples = backend._streaming.chunk_size_samples
+        backend.push_audio(_make_pcm_tone(chunk_samples + 100))
+        assert backend._streaming.current_text == "hello world"
+
+    def test_get_partial_empty_returns_none(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        result = backend.get_partial()
+        assert result is None
+
+    def test_get_partial_returns_current_text(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend._streaming.current_text = "hello world"
+        result = backend.get_partial()
+        assert result is not None
+        assert result.text == "hello world"
+        assert result.is_partial is True
+        assert result.is_endpoint is False
+
+    def test_multiple_chunks_call_inference_multiple_times(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        chunk_samples = backend._streaming.chunk_size_samples
+        backend.push_audio(_make_pcm_tone(chunk_samples * 2 + 100))
+        assert self.mock_nemo.conformer_stream_step.call_count == 2
+
+    def test_cache_state_updated_after_step(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        old_channel = backend._streaming.cache_last_channel
+        chunk_samples = backend._streaming.chunk_size_samples
+        backend.push_audio(_make_pcm_tone(chunk_samples + 100))
+        assert backend._streaming.cache_last_channel is not old_channel

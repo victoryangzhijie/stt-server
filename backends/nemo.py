@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +52,17 @@ _nemo_model: object | None = None
 _vad_base_model: object | None = None
 _model_lock = threading.Lock()
 _infer_lock = threading.Lock()
+
+
+@contextmanager
+def _no_grad():
+    """torch.no_grad() wrapper that works without torch installed."""
+    try:
+        import torch
+        with torch.no_grad():
+            yield
+    except ImportError:
+        yield
 
 
 def _get_nemo_model() -> object:
@@ -171,10 +183,65 @@ class NemoBackend:
         self._endpoint_fired: bool = False
 
     def push_audio(self, pcm_data: bytes) -> None:
-        pass  # Task 3
+        n_samples = len(pcm_data) // 2
+        if n_samples == 0:
+            return
+
+        samples_i16 = np.frombuffer(pcm_data[: n_samples * 2], dtype=np.int16)
+        audio_f32 = samples_i16.astype(np.float32) / 32768.0
+
+        self._streaming.audio_buffer = np.append(
+            self._streaming.audio_buffer, audio_f32
+        )
+        self._vad_buffer = np.append(self._vad_buffer, audio_f32)
+
+        # Run inference when enough audio has accumulated
+        s = self._streaming
+        while len(s.audio_buffer) >= s.chunk_size_samples:
+            chunk = s.audio_buffer[: s.chunk_size_samples]
+            s.audio_buffer = s.audio_buffer[s.chunk_size_samples:]
+
+            model = _get_nemo_model()
+            with _infer_lock:
+                # Feed raw audio to streaming buffer for feature extraction
+                s.streaming_buffer.append_audio_chunk(chunk)
+
+                # Iterate to get mel features
+                for processed_signal, processed_signal_length in s.streaming_buffer:
+                    with _no_grad():
+                        (
+                            pred_out,
+                            transcribed_texts,
+                            s.cache_last_channel,
+                            s.cache_last_time,
+                            s.cache_last_channel_len,
+                            s.previous_hypotheses,
+                        ) = model.conformer_stream_step(
+                            processed_signal=processed_signal,
+                            processed_signal_length=processed_signal_length,
+                            cache_last_channel=s.cache_last_channel,
+                            cache_last_time=s.cache_last_time,
+                            cache_last_channel_len=s.cache_last_channel_len,
+                            keep_all_outputs=False,
+                            previous_hypotheses=s.previous_hypotheses,
+                            previous_pred_out=s.previous_pred_out,
+                            drop_extra_pre_encoded=True,
+                            return_transcription=True,
+                        )
+
+                    s.previous_pred_out = pred_out
+
+                    if transcribed_texts and transcribed_texts[0]:
+                        s.current_text = transcribed_texts[0]
 
     def get_partial(self) -> ASRResult | None:
-        return None  # Task 3
+        if not self._streaming.current_text:
+            return None
+        return ASRResult(
+            text=self._streaming.current_text,
+            is_partial=True,
+            is_endpoint=False,
+        )
 
     def finalize(self) -> ASRResult:
         return ASRResult(text="", is_partial=False, is_endpoint=True)  # Task 4
