@@ -76,3 +76,123 @@ class _HypothesisBuffer:
 
     def complete(self) -> list[tuple[float, float, str]]:
         return self.buffer
+
+
+# ── StreamingState ───────────────────────────────────────────────────────────
+
+
+class _StreamingState:
+    """Per-connection streaming context."""
+
+    def __init__(self, language: str | None, buffer_trimming_sec: float = 15.0) -> None:
+        self.audio_buffer: np.ndarray = np.array([], dtype=np.float32)
+        self.hypothesis = _HypothesisBuffer()
+        self.committed: list[tuple[float, float, str]] = []
+        self.committed_text: str = ""
+        self.buffer_trimming_sec: float = buffer_trimming_sec
+        self.buffer_time_offset: float = 0.0
+        self.language: str | None = language
+        self.sample_rate: int = 16000
+
+
+# ── Module-level whisper model singleton ─────────────────────────────────────
+
+
+_whisper_model: object | None = None
+_vad_base_model: object | None = None
+_model_lock = threading.Lock()
+_infer_lock = threading.Lock()
+
+
+def _get_whisper_model() -> object:
+    global _whisper_model
+    if _whisper_model is None:
+        with _model_lock:
+            if _whisper_model is None:
+                from faster_whisper import WhisperModel
+
+                _whisper_model = WhisperModel(
+                    settings.whisper_model,
+                    compute_type=settings.whisper_compute_type,
+                )
+                logger.info(
+                    "whisper.model.loaded",
+                    model=settings.whisper_model,
+                    compute_type=settings.whisper_compute_type,
+                )
+    return _whisper_model
+
+
+def _get_vad_base_model() -> object:
+    global _vad_base_model
+    if _vad_base_model is None:
+        with _model_lock:
+            if _vad_base_model is None:
+                import torch
+
+                _vad_base_model, _ = torch.hub.load(
+                    repo_or_dir="snakers4/silero-vad",
+                    model="silero_vad",
+                )
+                logger.info("whisper.vad_base.loaded")
+    return _vad_base_model
+
+
+def preload_model() -> None:
+    """Preload both whisper and VAD models at startup."""
+    logger.info("whisper.preload.start")
+    _get_whisper_model()
+    _get_vad_base_model()
+    logger.info("whisper.preload.done")
+
+
+# ── WhisperBackend ───────────────────────────────────────────────────────────
+
+
+class WhisperBackend:
+    """Whisper ASR backend using faster-whisper with local agreement streaming."""
+
+    def configure(
+        self,
+        sample_rate: int,
+        language: str = "auto",
+        hotwords: list[str] | None = None,
+    ) -> None:
+        self._sample_rate = sample_rate
+        self._language = language
+
+        lang = None if language == "auto" else language
+        self._streaming = _StreamingState(language=lang)
+
+        # Per-connection Silero VAD (deepcopy for independent LSTM state)
+        vad_base = _get_vad_base_model()
+        self._vad_model = copy.deepcopy(vad_base)
+        self._vad_buffer: np.ndarray = np.array([], dtype=np.float32)
+        self._in_speech: bool = False
+        self._silence_ms_accum: float = 0.0
+        self._endpoint_fired: bool = False
+
+    def push_audio(self, pcm_data: bytes) -> None:
+        pass  # implemented in Task 4
+
+    def get_partial(self) -> ASRResult | None:
+        return None  # implemented in Task 5
+
+    def finalize(self) -> ASRResult:
+        return ASRResult(text="", is_partial=False, is_endpoint=True)  # implemented in Task 5
+
+    def detect_endpoint(self) -> bool:
+        return False  # implemented in Task 6
+
+    def reset_segment(self) -> None:
+        lang = None if self._language == "auto" else self._language
+        self._streaming = _StreamingState(language=lang)
+
+        self._vad_model = copy.deepcopy(_get_vad_base_model())
+        self._vad_buffer = np.array([], dtype=np.float32)
+        self._in_speech = False
+        self._silence_ms_accum = 0.0
+        self._endpoint_fired = False
+
+    def close(self) -> None:
+        pass  # model is shared singleton, not per-connection

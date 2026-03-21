@@ -75,3 +75,97 @@ class TestHypothesisBuffer:
         words2 = [(0.0, 0.3, "old"), (0.5, 1.0, "world")]
         buf.insert(words2, offset=0.0)
         assert all(w[0] >= buf.last_commited_time - 0.1 for w in buf.new)
+
+
+import struct
+from unittest.mock import MagicMock, patch
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _make_pcm_silence(n_samples: int) -> bytes:
+    """PCM16LE silence (all zeros)."""
+    return b"\x00\x00" * n_samples
+
+
+def _make_pcm_tone(n_samples: int, amplitude: int = 10000) -> bytes:
+    """PCM16LE constant-amplitude samples (square wave)."""
+    return struct.pack(f"<{n_samples}h", *([amplitude] * n_samples))
+
+
+def _make_mock_whisper_model():
+    """Create a mock faster-whisper WhisperModel."""
+    mock_model = MagicMock()
+
+    def _mock_transcribe(audio, **kwargs):
+        seg = MagicMock()
+        word1 = MagicMock()
+        word1.start = 0.0
+        word1.end = 0.5
+        word1.word = "hello"
+        word2 = MagicMock()
+        word2.start = 0.5
+        word2.end = 1.0
+        word2.word = " world"
+        seg.words = [word1, word2]
+        seg.no_speech_prob = 0.0
+        seg.end = 1.0
+        info = MagicMock()
+        return iter([seg]), info
+
+    mock_model.transcribe.side_effect = _mock_transcribe
+    return mock_model
+
+
+def _make_mock_vad_model(speech_prob: float = 0.0):
+    """Create a mock Silero VAD model."""
+    mock_vad = MagicMock()
+    mock_vad.return_value = MagicMock(item=MagicMock(return_value=speech_prob))
+    mock_vad.reset_states = MagicMock()
+    return mock_vad
+
+
+def _make_backend(mock_whisper=None, mock_vad=None, language="auto"):
+    """Create and configure a WhisperBackend with models mocked out."""
+    if mock_whisper is None:
+        mock_whisper = _make_mock_whisper_model()
+    if mock_vad is None:
+        mock_vad = _make_mock_vad_model()
+
+    with (
+        patch("backends.whisper._get_whisper_model", return_value=mock_whisper),
+        patch("backends.whisper._get_vad_base_model", return_value=mock_vad),
+    ):
+        from backends.whisper import WhisperBackend
+
+        b = WhisperBackend()
+        b.configure(sample_rate=16000, language=language)
+    return b
+
+
+class TestConfigureAndClose:
+    def test_configure_initializes_state(self):
+        backend = _make_backend()
+        assert backend._sample_rate == 16000
+        assert backend._language == "auto"
+        assert backend._streaming is not None
+        assert backend._in_speech is False
+        assert backend._endpoint_fired is False
+
+    def test_configure_language(self):
+        backend = _make_backend(language="en")
+        assert backend._streaming.language == "en"
+
+    def test_configure_auto_language(self):
+        backend = _make_backend(language="auto")
+        assert backend._streaming.language is None
+
+    def test_close_is_noop(self):
+        backend = _make_backend()
+        backend.close()
+
+    def test_close_idempotent(self):
+        backend = _make_backend()
+        backend.close()
+        backend.close()
