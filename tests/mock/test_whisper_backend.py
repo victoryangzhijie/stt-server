@@ -202,3 +202,115 @@ class TestPushAudio:
         backend = _make_backend()
         backend.push_audio(b"")
         assert len(backend._streaming.audio_buffer) == 0
+
+
+class TestStreamingEngine:
+    def setup_method(self):
+        self.mock_whisper = _make_mock_whisper_model()
+        self.mock_vad = _make_mock_vad_model()
+        self.whisper_patcher = patch(
+            "backends.whisper._get_whisper_model", return_value=self.mock_whisper
+        )
+        self.vad_patcher = patch(
+            "backends.whisper._get_vad_base_model", return_value=self.mock_vad
+        )
+        self.whisper_patcher.start()
+        self.vad_patcher.start()
+
+    def teardown_method(self):
+        self.whisper_patcher.stop()
+        self.vad_patcher.stop()
+
+    def test_get_partial_empty_returns_none(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        result = backend.get_partial()
+        assert result is None
+
+    def test_get_partial_with_audio(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(16000))
+        result = backend.get_partial()
+        assert result is not None
+        assert result.is_partial is True
+        assert result.is_endpoint is False
+        assert "hello" in result.text or "world" in result.text
+
+    def test_committed_text_grows(self):
+        """Two get_partial calls with same words → text gets committed."""
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(16000))
+        r1 = backend.get_partial()
+        r2 = backend.get_partial()
+        assert r2 is not None
+        assert "hello" in r2.text
+
+    def test_get_partial_calls_transcribe(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(16000))
+        backend.get_partial()
+        self.mock_whisper.transcribe.assert_called_once()
+        call_kwargs = self.mock_whisper.transcribe.call_args
+        assert call_kwargs[1].get("word_timestamps") is True
+
+    def test_get_partial_passes_language(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad, language="en")
+        backend.push_audio(_make_pcm_tone(16000))
+        backend.get_partial()
+        call_kwargs = self.mock_whisper.transcribe.call_args[1]
+        assert call_kwargs.get("language") == "en"
+
+    def test_get_partial_auto_language_passes_none(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad, language="auto")
+        backend.push_audio(_make_pcm_tone(16000))
+        backend.get_partial()
+        call_kwargs = self.mock_whisper.transcribe.call_args[1]
+        assert call_kwargs.get("language") is None
+
+    def test_buffer_trimming(self):
+        """Audio buffer trimmed when exceeding threshold."""
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend._streaming.buffer_trimming_sec = 1.0
+        backend.push_audio(_make_pcm_tone(32000))
+        assert len(backend._streaming.audio_buffer) == 32000
+        backend.get_partial()
+        backend.get_partial()
+        assert len(backend._streaming.audio_buffer) < 32000
+
+
+class TestFinalize:
+    def setup_method(self):
+        self.mock_whisper = _make_mock_whisper_model()
+        self.mock_vad = _make_mock_vad_model()
+        self.whisper_patcher = patch(
+            "backends.whisper._get_whisper_model", return_value=self.mock_whisper
+        )
+        self.vad_patcher = patch(
+            "backends.whisper._get_vad_base_model", return_value=self.mock_vad
+        )
+        self.whisper_patcher.start()
+        self.vad_patcher.start()
+
+    def teardown_method(self):
+        self.whisper_patcher.stop()
+        self.vad_patcher.stop()
+
+    def test_finalize_returns_full_text(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(16000))
+        result = backend.finalize()
+        assert result.is_partial is False
+        assert result.is_endpoint is True
+        assert isinstance(result.text, str)
+
+    def test_finalize_empty_state(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        result = backend.finalize()
+        assert result.text == ""
+        assert result.is_partial is False
+        assert result.is_endpoint is True
+
+    def test_finalize_calls_transcribe(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(16000))
+        backend.finalize()
+        self.mock_whisper.transcribe.assert_called()

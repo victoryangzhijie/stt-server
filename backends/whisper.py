@@ -185,11 +185,122 @@ class WhisperBackend:
         )
         self._vad_buffer = np.append(self._vad_buffer, audio_f32)
 
+    def _build_prompt(self, s: _StreamingState) -> str:
+        """Build initial_prompt from committed words BEFORE buffer_time_offset.
+
+        Only words from the trimmed-away audio portion are used as prompt context.
+        Words still inside the audio buffer are re-transcribed, so including them
+        in the prompt would cause hallucination/repetition.
+        """
+        k = max(0, len(s.committed) - 1)
+        while k > 0 and s.committed[k - 1][1] > s.buffer_time_offset:
+            k -= 1
+
+        prompt_words = s.committed[:k]
+        prompt_texts: list[str] = []
+        length = 0
+        for _, _, t in reversed(prompt_words):
+            length += len(t) + 1
+            if length > 200:
+                break
+            prompt_texts.append(t)
+        return "".join(reversed(prompt_texts))
+
     def get_partial(self) -> ASRResult | None:
-        return None  # implemented in Task 5
+        s = self._streaming
+        if len(s.audio_buffer) == 0:
+            return None
+
+        model = _get_whisper_model()
+        with _infer_lock:
+            segments, _info = model.transcribe(
+                s.audio_buffer,
+                language=s.language,
+                initial_prompt=self._build_prompt(s),
+                beam_size=settings.whisper_beam_size,
+                word_timestamps=True,
+                condition_on_previous_text=True,
+            )
+            tsw: list[tuple[float, float, str]] = []
+            for segment in segments:
+                if segment.no_speech_prob > 0.9:
+                    continue
+                for word in segment.words:
+                    tsw.append((word.start, word.end, word.word))
+
+        s.hypothesis.insert(tsw, s.buffer_time_offset)
+        committed = s.hypothesis.flush()
+        s.committed.extend(committed)
+
+        if committed:
+            s.committed_text += "".join(t for _, _, t in committed)
+
+        if len(s.audio_buffer) / s.sample_rate > s.buffer_trimming_sec:
+            self._trim_buffer(s)
+
+        incomplete = s.hypothesis.complete()
+        partial_text = s.committed_text + "".join(t for _, _, t in incomplete)
+
+        if not partial_text.strip():
+            return None
+
+        return ASRResult(text=partial_text.strip(), is_partial=True, is_endpoint=False)
+
+    def _trim_buffer(self, s: _StreamingState) -> None:
+        """Trim audio buffer at a safe boundary, preserving context for dedup."""
+        if len(s.committed) < 2:
+            return
+
+        trim_time = s.committed[-2][1]
+        cut_seconds = trim_time - s.buffer_time_offset
+        cut_samples = int(cut_seconds * s.sample_rate)
+
+        if cut_samples > 0 and cut_samples < len(s.audio_buffer):
+            s.audio_buffer = s.audio_buffer[cut_samples:]
+            s.buffer_time_offset = trim_time
+            s.hypothesis.pop_commited(trim_time)
 
     def finalize(self) -> ASRResult:
-        return ASRResult(text="", is_partial=False, is_endpoint=True)  # implemented in Task 5
+        s = self._streaming
+        if len(s.audio_buffer) == 0:
+            return ASRResult(
+                text=s.committed_text.strip(),
+                is_partial=False,
+                is_endpoint=True,
+            )
+
+        model = _get_whisper_model()
+        with _infer_lock:
+            segments, _info = model.transcribe(
+                s.audio_buffer,
+                language=s.language,
+                initial_prompt=self._build_prompt(s),
+                beam_size=settings.whisper_beam_size,
+                word_timestamps=True,
+                condition_on_previous_text=True,
+            )
+            tsw: list[tuple[float, float, str]] = []
+            for segment in segments:
+                if segment.no_speech_prob > 0.9:
+                    continue
+                for word in segment.words:
+                    tsw.append((word.start, word.end, word.word))
+
+        s.hypothesis.insert(tsw, s.buffer_time_offset)
+        flushed = s.hypothesis.flush()
+
+        if flushed:
+            s.committed_text += "".join(t for _, _, t in flushed)
+
+        remaining = s.hypothesis.complete()
+        remaining_text = "".join(t for _, _, t in remaining)
+        full_text = s.committed_text + remaining_text
+
+        return ASRResult(
+            text=full_text.strip(),
+            is_partial=False,
+            is_endpoint=True,
+        )
 
     def detect_endpoint(self) -> bool:
         return False  # implemented in Task 6
