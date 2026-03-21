@@ -18,6 +18,10 @@ async def lifespan(app: FastAPI):
         from backends.qwen3 import preload_model
 
         preload_model()  # 阻塞式加载模型
+    elif settings.backend == "whisper":
+        from backends.whisper import preload_model
+
+        preload_model()
 
     yield
 

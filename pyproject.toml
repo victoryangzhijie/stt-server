@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 qwen3 = ["qwen-asr[vllm]>=0.0.6", "numpy"]
+whisper = ["faster-whisper", "torch"]
 
 [dependency-groups]
 dev = [

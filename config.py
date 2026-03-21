@@ -45,5 +45,11 @@ class Settings(BaseSettings):
     streaming_unfixed_chunk_num: int = 2
     streaming_unfixed_token_num: int = 5
 
+    # Whisper backend config
+    whisper_model: str = "large-v3-turbo"
+    whisper_compute_type: str = "float16"
+    whisper_beam_size: int = 5
+    whisper_vad_threshold: float = 0.5
+
 
 settings = Settings()
