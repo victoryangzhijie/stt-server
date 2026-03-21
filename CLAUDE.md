@@ -13,6 +13,9 @@ uv sync --group dev
 # Install with Qwen3 backend (requires CUDA)
 uv sync --group dev --extra qwen3
 
+# Install with Whisper backend (requires CUDA for GPU acceleration)
+uv sync --group dev --extra whisper
+
 # Run mock tests (no GPU needed)
 STT_BACKEND=mock .venv/bin/python -m pytest tests/mock/ -v
 
@@ -30,6 +33,9 @@ STT_BACKEND=mock uvicorn app:app --host 0.0.0.0 --port 8000
 
 # Start the server (qwen3 backend, requires CUDA)
 STT_BACKEND=qwen3 STT_VLLM_MODEL=/path/to/Qwen3-ASR-1.7B uvicorn app:app --host 0.0.0.0 --port 8000
+
+# Start the server (whisper backend, requires CUDA for GPU)
+STT_BACKEND=whisper STT_WHISPER_MODEL=large-v3-turbo uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
 ## Architecture
@@ -46,6 +52,7 @@ Client ──ws──► _recv_pump (async) ──► janus in_queue ──► r
 - **`backends/registry.py`** — Factory using lazy `importlib` import from string paths. Selected via `STT_BACKEND` env var.
 - **`session/state.py`** — Per-connection state: segment sequencing, partial throttling (`should_send_partial()`), timing computation for final messages.
 - **`protocol/schema.py`** — `ConnParams` validation from query string, message builder functions (`build_ready`, `build_partial`, `build_final`, `build_error`).
+- **`backends/whisper.py`** — Whisper backend using `faster-whisper` with local agreement streaming (ported from whisper_streaming). Per-connection Silero VAD for endpoint detection. Global singleton whisper model with `_infer_lock`. Inference in `get_partial()`/`finalize()` (re-transcribes full buffer each time, unlike qwen3's incremental approach).
 - **`observability/`** — `logging.py` has structlog setup + `TroubleshootCollector` (ring buffer of events emitted on abnormal close). `metrics.py` defines all Prometheus counters/histograms.
 
 ## Scaling
@@ -93,7 +100,18 @@ asr.finish_streaming_transcribe(state)
 
 ## Configuration
 
-All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACKEND` (mock/qwen3), `STT_VLLM_MODEL`, `STT_VAD_THRESHOLD`, `STT_VAD_SILENCE_MS` (default 500ms), `STT_STREAMING_CHUNK_SIZE_SEC` (default 0.5s), `STT_STREAMING_UNFIXED_CHUNK_NUM`, `STT_STREAMING_UNFIXED_TOKEN_NUM`.
+All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACKEND` (mock/qwen3/whisper), `STT_VLLM_MODEL`, `STT_VAD_THRESHOLD`, `STT_VAD_SILENCE_MS` (default 500ms), `STT_STREAMING_CHUNK_SIZE_SEC` (default 0.5s), `STT_STREAMING_UNFIXED_CHUNK_NUM`, `STT_STREAMING_UNFIXED_TOKEN_NUM`.
+
+## Whisper Backend
+
+Uses `faster-whisper` with streaming via Local Agreement Policy (ported from `whisper_streaming`). Text is only emitted when confirmed stable across consecutive transcriptions.
+
+**Key differences from qwen3:**
+- Inference in `get_partial()`/`finalize()` (re-transcribes full audio buffer), not `push_audio()`
+- Silero VAD (neural) instead of energy-based RMS
+- Per-connection VAD model instances (Silero LSTM state not shareable)
+
+**Config:** `STT_WHISPER_MODEL` (default `large-v3-turbo`), `STT_WHISPER_COMPUTE_TYPE` (default `float16`), `STT_WHISPER_BEAM_SIZE` (default `5`), `STT_WHISPER_VAD_THRESHOLD` (default `0.5`). Reuses `STT_VAD_SILENCE_MS`.
 
 ## Testing Notes
 
@@ -102,7 +120,8 @@ All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACK
 ```
 tests/
 ├── mock/     # Tests that run with STT_BACKEND=mock (no GPU needed)
-└── qwen3/   # Tests that require CUDA + qwen3 backend
+├── qwen3/   # Tests that require CUDA + qwen3 backend
+└── whisper/  # Tests that require CUDA + whisper backend (future)
 ```
 
 ### Running Tests
@@ -111,6 +130,7 @@ tests/
 |---------|---------|--------------|
 | mock | `STT_BACKEND=mock .venv/bin/python -m pytest tests/mock/ -v` | No |
 | qwen3 | `STT_BACKEND=qwen3 .venv/bin/python -m pytest tests/qwen3/ -v` | Yes |
+| whisper | `STT_BACKEND=whisper .venv/bin/python -m pytest tests/whisper/ -v` | Yes |
 
 ### Mock Tests (`tests/mock/`)
 
@@ -118,6 +138,7 @@ tests/
 - Includes: unit tests for mock backend, schema, session state, VAD state machine
 - Integration tests spin up a real uvicorn server in a background thread (fixture in `conftest.py`)
 - Qwen3 backend tests mock `_get_asr_model` for unit tests; VAD tests also require the mock (push_audio calls streaming_transcribe)
+- Whisper backend tests mock `_get_whisper_model` and `_get_vad_base_model` for unit tests
 
 ### Qwen3 Tests (`tests/qwen3/`)
 - In the real CUDA production environment, the STT_BACKEND must prioritize Qwen3.
