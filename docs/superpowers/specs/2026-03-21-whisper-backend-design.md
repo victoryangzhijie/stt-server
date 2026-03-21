@@ -33,12 +33,14 @@ Single file implementing `ASRBackend` protocol, containing:
 
 ```
 _whisper_model   : WhisperModel (faster-whisper)     loaded once, shared across connections
-_model_lock      : threading.Lock                     guards whisper model loading
+_vad_base_model  : Silero VAD model (torch)           loaded once, deepcopy'd per connection
+_model_lock      : threading.Lock                     guards whisper + VAD base model loading
 _infer_lock      : threading.Lock                     serializes all whisper inference calls
 ```
 
 - `_get_whisper_model()`: lazy loader with double-checked locking
-- `preload_model()`: eager loading at app startup (loads whisper model)
+- `_get_vad_base_model()`: lazy loader, calls `torch.hub.load('snakers4/silero-vad', 'silero_vad')` once. Per-connection instances created via `copy.deepcopy(_vad_base_model)` in `configure()` to get independent LSTM state.
+- `preload_model()`: eager loading at app startup (loads both whisper model and Silero VAD base model, so first connection doesn't pay loading cost)
 - All lazy imports (`faster_whisper`, `torch`, `numpy`) inside functions
 
 **Note:** Unlike qwen3 where `push_audio()` does incremental inference, whisper's architecture requires re-transcribing the full audio buffer each time. Therefore inference lives in `get_partial()` and `finalize()`, while `push_audio()` only appends to the buffer. This means `_infer_lock` serializes `get_partial()`/`finalize()` calls across all connections — partials are delivered sequentially. This is acceptable because whisper transcription is the bottleneck regardless, and horizontal scaling (multiple workers) addresses concurrency.
@@ -67,6 +69,7 @@ Per-connection streaming context:
 - `committed_text`: confirmed text so far
 - `buffer_trimming_sec`: trim threshold (default 15s)
 - `sample_rate`: 16000
+- `language`: language code passed to `faster-whisper` transcribe (e.g. `"en"`, `"zh"`). `"auto"` maps to `None` (auto-detection).
 
 ### Data Flow
 
@@ -116,7 +119,7 @@ This prevents unbounded memory growth while preserving enough audio context for 
 
 ### VAD (Silero)
 
-**Per-connection VAD model instances.** Silero VAD maintains internal LSTM hidden state (`h`, `c`) that is updated on each forward pass. Sharing a single model across connections would corrupt this state. Each `WhisperBackend` instance creates its own Silero VAD model clone in `configure()`.
+**Per-connection VAD model instances.** Silero VAD maintains internal LSTM hidden state (`h`, `c`) that is updated on each forward pass. Sharing a single model across connections would corrupt this state. A base model is loaded once globally via `_get_vad_base_model()`, then each `WhisperBackend` instance creates its own clone via `copy.deepcopy()` in `configure()` to get independent LSTM state.
 
 Per-connection state:
 
