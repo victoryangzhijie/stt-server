@@ -307,7 +307,41 @@ class WhisperBackend:
         )
 
     def detect_endpoint(self) -> bool:
-        return False  # implemented in Task 6
+        try:
+            import torch
+            _has_torch = True
+        except ImportError:
+            _has_torch = False
+
+        # Process vad_buffer in 512-sample chunks
+        while len(self._vad_buffer) >= 512:
+            chunk = self._vad_buffer[:512]
+            self._vad_buffer = self._vad_buffer[512:]
+
+            if _has_torch:
+                import torch
+                audio_input = torch.tensor(chunk, dtype=torch.float32)
+            else:
+                audio_input = chunk
+            speech_prob = self._vad_model(audio_input, self._sample_rate).item()
+
+            chunk_ms = 512 / self._sample_rate * 1000  # 32ms at 16kHz
+
+            if speech_prob >= settings.whisper_vad_threshold:
+                self._in_speech = True
+                self._silence_ms_accum = 0.0
+            elif self._in_speech:
+                self._silence_ms_accum += chunk_ms
+
+        if (
+            self._in_speech
+            and not self._endpoint_fired
+            and self._silence_ms_accum >= settings.vad_silence_ms
+        ):
+            self._endpoint_fired = True
+            return True
+
+        return False
 
     def reset_segment(self) -> None:
         lang = None if self._language == "auto" else self._language

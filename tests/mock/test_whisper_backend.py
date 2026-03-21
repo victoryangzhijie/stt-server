@@ -314,3 +314,134 @@ class TestFinalize:
         backend.push_audio(_make_pcm_tone(16000))
         backend.finalize()
         self.mock_whisper.transcribe.assert_called()
+
+
+class TestVAD:
+    """Tests for Silero VAD-based endpoint detection."""
+
+    def _make_backend_with_vad(self, speech_prob=0.0):
+        """Create backend with configurable VAD mock."""
+        mock_whisper = _make_mock_whisper_model()
+        mock_vad = _make_mock_vad_model(speech_prob=speech_prob)
+        return _make_backend(mock_whisper, mock_vad), mock_vad
+
+    def test_silence_does_not_trigger_speech(self):
+        backend, _ = self._make_backend_with_vad(speech_prob=0.1)
+        backend.push_audio(_make_pcm_silence(512))
+        backend.detect_endpoint()
+        assert backend._in_speech is False
+
+    def test_speech_triggers_in_speech(self):
+        backend, mock_vad = self._make_backend_with_vad(speech_prob=0.9)
+        backend.push_audio(_make_pcm_tone(512))
+        backend.detect_endpoint()
+        assert backend._in_speech is True
+
+    def test_endpoint_after_sustained_silence(self):
+        """Speech followed by enough silence triggers endpoint."""
+        mock_whisper = _make_mock_whisper_model()
+
+        call_count = [0]
+        speech_chunks = 2
+        def _vad_side_effect(chunk, sr):
+            call_count[0] += 1
+            prob = 0.9 if call_count[0] <= speech_chunks else 0.1
+            result = MagicMock()
+            result.item.return_value = prob
+            return result
+
+        mock_vad = MagicMock()
+        mock_vad.side_effect = _vad_side_effect
+        mock_vad.reset_states = MagicMock()
+
+        backend = _make_backend(mock_whisper, mock_vad)
+
+        backend.push_audio(_make_pcm_tone(1024))
+        backend.detect_endpoint()
+        assert backend._in_speech is True
+
+        backend.push_audio(_make_pcm_silence(8192))
+        result = backend.detect_endpoint()
+        assert result is True
+
+    def test_endpoint_fires_once(self):
+        mock_whisper = _make_mock_whisper_model()
+        call_count = [0]
+        speech_chunks = 2
+        def _vad_side_effect(chunk, sr):
+            call_count[0] += 1
+            prob = 0.9 if call_count[0] <= speech_chunks else 0.1
+            result = MagicMock()
+            result.item.return_value = prob
+            return result
+
+        mock_vad = MagicMock()
+        mock_vad.side_effect = _vad_side_effect
+        mock_vad.reset_states = MagicMock()
+
+        backend = _make_backend(mock_whisper, mock_vad)
+        backend.push_audio(_make_pcm_tone(1024))
+        backend.detect_endpoint()
+        backend.push_audio(_make_pcm_silence(8192))
+        assert backend.detect_endpoint() is True
+        assert backend.detect_endpoint() is False
+
+    def test_speech_resets_silence_accumulator(self):
+        """Intermittent speech should reset silence accumulation."""
+        mock_whisper = _make_mock_whisper_model()
+        call_count = [0]
+        pattern = [0.9, 0.9, 0.1, 0.1, 0.1, 0.1, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1]
+
+        def _vad_side_effect(chunk, sr):
+            idx = min(call_count[0], len(pattern) - 1)
+            call_count[0] += 1
+            result = MagicMock()
+            result.item.return_value = pattern[idx]
+            return result
+
+        mock_vad = MagicMock()
+        mock_vad.side_effect = _vad_side_effect
+        mock_vad.reset_states = MagicMock()
+
+        backend = _make_backend(mock_whisper, mock_vad)
+        backend.push_audio(_make_pcm_tone(6144))
+        result = backend.detect_endpoint()
+        assert result is False
+
+    def test_no_endpoint_without_speech(self):
+        """Silence alone should never fire an endpoint."""
+        backend, _ = self._make_backend_with_vad(speech_prob=0.1)
+        backend.push_audio(_make_pcm_silence(16000))
+        assert backend.detect_endpoint() is False
+
+
+class TestResetSegment:
+    def setup_method(self):
+        self.mock_whisper = _make_mock_whisper_model()
+        self.mock_vad = _make_mock_vad_model(speech_prob=0.9)
+        self.whisper_patcher = patch(
+            "backends.whisper._get_whisper_model", return_value=self.mock_whisper
+        )
+        self.vad_patcher = patch(
+            "backends.whisper._get_vad_base_model", return_value=self.mock_vad
+        )
+        self.whisper_patcher.start()
+        self.vad_patcher.start()
+
+    def teardown_method(self):
+        self.whisper_patcher.stop()
+        self.vad_patcher.stop()
+
+    def test_reset_clears_all_state(self):
+        backend = _make_backend(self.mock_whisper, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(1600))
+        backend.detect_endpoint()
+
+        old_streaming = backend._streaming
+        backend.reset_segment()
+
+        assert backend._streaming is not old_streaming
+        assert backend._in_speech is False
+        assert backend._silence_ms_accum == 0.0
+        assert backend._endpoint_fired is False
+        assert len(backend._vad_buffer) == 0
