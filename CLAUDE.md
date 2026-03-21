@@ -13,6 +13,9 @@ uv sync --group dev
 # Install with Qwen3 backend (requires CUDA)
 uv sync --group dev --extra qwen3
 
+# Install with NeMo backend (requires CUDA)
+uv sync --group dev --extra nemo
+
 # Run mock tests (no GPU needed)
 STT_BACKEND=mock .venv/bin/python -m pytest tests/mock/ -v
 
@@ -30,6 +33,9 @@ STT_BACKEND=mock uvicorn app:app --host 0.0.0.0 --port 8000
 
 # Start the server (qwen3 backend, requires CUDA)
 STT_BACKEND=qwen3 STT_VLLM_MODEL=/path/to/Qwen3-ASR-1.7B uvicorn app:app --host 0.0.0.0 --port 8000
+
+# Start the server (nemo backend, requires CUDA)
+STT_BACKEND=nemo STT_NEMO_MODEL=stt_en_fastconformer_transducer_large_streaming uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
 ## Architecture
@@ -46,6 +52,7 @@ Client ──ws──► _recv_pump (async) ──► janus in_queue ──► r
 - **`backends/registry.py`** — Factory using lazy `importlib` import from string paths. Selected via `STT_BACKEND` env var.
 - **`session/state.py`** — Per-connection state: segment sequencing, partial throttling (`should_send_partial()`), timing computation for final messages.
 - **`protocol/schema.py`** — `ConnParams` validation from query string, message builder functions (`build_ready`, `build_partial`, `build_final`, `build_error`).
+- **`backends/nemo.py`** — NeMo ASR backend using cache-aware streaming with FastConformer. Per-connection encoder caches + Silero VAD. Global singleton model with `_infer_lock`. Inference in `push_audio()` (incremental, like qwen3). `CacheAwareStreamingAudioBuffer` handles mel-spectrogram feature extraction.
 - **`observability/`** — `logging.py` has structlog setup + `TroubleshootCollector` (ring buffer of events emitted on abnormal close). `metrics.py` defines all Prometheus counters/histograms.
 
 ## Scaling
@@ -93,7 +100,20 @@ asr.finish_streaming_transcribe(state)
 
 ## Configuration
 
-All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACKEND` (mock/qwen3), `STT_VLLM_MODEL`, `STT_VAD_THRESHOLD`, `STT_VAD_SILENCE_MS` (default 500ms), `STT_STREAMING_CHUNK_SIZE_SEC` (default 0.5s), `STT_STREAMING_UNFIXED_CHUNK_NUM`, `STT_STREAMING_UNFIXED_TOKEN_NUM`.
+All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACKEND` (mock/qwen3/nemo), `STT_VLLM_MODEL`, `STT_VAD_THRESHOLD`, `STT_VAD_SILENCE_MS` (default 500ms), `STT_STREAMING_CHUNK_SIZE_SEC` (default 0.5s), `STT_STREAMING_UNFIXED_CHUNK_NUM`, `STT_STREAMING_UNFIXED_TOKEN_NUM`.
+
+## NeMo Backend
+
+Uses NeMo's cache-aware streaming with FastConformer for low-latency incremental transcription.
+
+**Key characteristics:**
+- Inference in `push_audio()` (incremental, like qwen3) — each chunk processed with cached encoder context
+- Silero VAD (neural) for endpoint detection — per-connection model instances
+- `CacheAwareStreamingAudioBuffer` handles mel-spectrogram feature extraction and normalization
+- Per-connection cache state: `cache_last_channel`, `cache_last_time`, `cache_pre_encode`, etc.
+- Language is model-specific (change `STT_NEMO_MODEL` to switch language)
+
+**Config:** `STT_NEMO_MODEL` (default `stt_en_fastconformer_transducer_large_streaming`), `STT_NEMO_CHUNK_SIZE` (default `0.34`s), `STT_NEMO_SHIFT_SIZE` (default `0.34`s), `STT_NEMO_LEFT_CHUNKS` (default `2`), `STT_NEMO_VAD_THRESHOLD` (default `0.5`). Reuses `STT_VAD_SILENCE_MS`.
 
 ## Testing Notes
 
@@ -102,7 +122,8 @@ All settings via `STT_` prefixed env vars (see `config.py`). Key ones: `STT_BACK
 ```
 tests/
 ├── mock/     # Tests that run with STT_BACKEND=mock (no GPU needed)
-└── qwen3/   # Tests that require CUDA + qwen3 backend
+├── qwen3/   # Tests that require CUDA + qwen3 backend
+└── nemo/    # Tests that require CUDA + nemo backend (future)
 ```
 
 ### Running Tests
@@ -111,6 +132,7 @@ tests/
 |---------|---------|--------------|
 | mock | `STT_BACKEND=mock .venv/bin/python -m pytest tests/mock/ -v` | No |
 | qwen3 | `STT_BACKEND=qwen3 .venv/bin/python -m pytest tests/qwen3/ -v` | Yes |
+| nemo | `STT_BACKEND=nemo .venv/bin/python -m pytest tests/nemo/ -v` | Yes |
 
 ### Mock Tests (`tests/mock/`)
 
@@ -118,6 +140,7 @@ tests/
 - Includes: unit tests for mock backend, schema, session state, VAD state machine
 - Integration tests spin up a real uvicorn server in a background thread (fixture in `conftest.py`)
 - Qwen3 backend tests mock `_get_asr_model` for unit tests; VAD tests also require the mock (push_audio calls streaming_transcribe)
+- NeMo backend tests mock `_get_nemo_model`, `_get_vad_base_model`, and `CacheAwareStreamingAudioBuffer`
 
 ### Qwen3 Tests (`tests/qwen3/`)
 - In the real CUDA production environment, the STT_BACKEND must prioritize Qwen3.
