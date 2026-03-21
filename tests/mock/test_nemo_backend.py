@@ -203,3 +203,58 @@ class TestPushAudioAndPartial:
         chunk_samples = backend._streaming.chunk_size_samples
         backend.push_audio(_make_pcm_tone(chunk_samples + 100))
         assert backend._streaming.cache_last_channel is not old_channel
+
+
+class TestFinalize:
+    def setup_method(self):
+        self.mock_nemo = _make_mock_nemo_model()
+        self.mock_vad = _make_mock_vad_model()
+        self.mock_streaming_buf = _make_mock_streaming_buffer()
+        self.nemo_patcher = patch(
+            "backends.nemo._get_nemo_model", return_value=self.mock_nemo
+        )
+        self.vad_patcher = patch(
+            "backends.nemo._get_vad_base_model", return_value=self.mock_vad
+        )
+        self.buf_patcher = patch(
+            "backends.nemo.CacheAwareStreamingAudioBuffer",
+            return_value=self.mock_streaming_buf,
+        )
+        self.nemo_patcher.start()
+        self.vad_patcher.start()
+        self.buf_patcher.start()
+
+    def teardown_method(self):
+        self.nemo_patcher.stop()
+        self.vad_patcher.stop()
+        self.buf_patcher.stop()
+
+    def test_finalize_empty_state(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        result = backend.finalize()
+        assert result.text == ""
+        assert result.is_partial is False
+        assert result.is_endpoint is True
+
+    def test_finalize_returns_current_text(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend._streaming.current_text = "existing text"
+        backend._streaming.audio_buffer = np.array([0.1] * 1000, dtype=np.float32)
+        result = backend.finalize()
+        assert result.is_partial is False
+        assert result.is_endpoint is True
+        self.mock_nemo.conformer_stream_step.assert_called()
+
+    def test_finalize_uses_keep_all_outputs(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend._streaming.audio_buffer = np.array([0.1] * 1000, dtype=np.float32)
+        backend.finalize()
+        call_kwargs = self.mock_nemo.conformer_stream_step.call_args
+        assert call_kwargs.kwargs.get("keep_all_outputs") is True
+
+    def test_finalize_no_remaining_audio(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend._streaming.current_text = "already transcribed"
+        result = backend.finalize()
+        assert result.text == "already transcribed"
+        self.mock_nemo.conformer_stream_step.assert_not_called()

@@ -244,7 +244,54 @@ class NemoBackend:
         )
 
     def finalize(self) -> ASRResult:
-        return ASRResult(text="", is_partial=False, is_endpoint=True)  # Task 4
+        s = self._streaming
+
+        # Flush remaining audio if any
+        if len(s.audio_buffer) > 0:
+            # Pad to chunk_size if needed
+            if len(s.audio_buffer) < s.chunk_size_samples:
+                pad_len = s.chunk_size_samples - len(s.audio_buffer)
+                s.audio_buffer = np.append(
+                    s.audio_buffer, np.zeros(pad_len, dtype=np.float32)
+                )
+
+            chunk = s.audio_buffer[: s.chunk_size_samples]
+            s.audio_buffer = s.audio_buffer[s.chunk_size_samples:]
+
+            model = _get_nemo_model()
+            with _infer_lock:
+                s.streaming_buffer.append_audio_chunk(chunk)
+
+                for processed_signal, processed_signal_length in s.streaming_buffer:
+                    with _no_grad():
+                        (
+                            pred_out,
+                            transcribed_texts,
+                            s.cache_last_channel,
+                            s.cache_last_time,
+                            s.cache_last_channel_len,
+                            s.previous_hypotheses,
+                        ) = model.conformer_stream_step(
+                            processed_signal=processed_signal,
+                            processed_signal_length=processed_signal_length,
+                            cache_last_channel=s.cache_last_channel,
+                            cache_last_time=s.cache_last_time,
+                            cache_last_channel_len=s.cache_last_channel_len,
+                            keep_all_outputs=True,
+                            previous_hypotheses=s.previous_hypotheses,
+                            previous_pred_out=s.previous_pred_out,
+                            drop_extra_pre_encoded=True,
+                            return_transcription=True,
+                        )
+
+                    if transcribed_texts and transcribed_texts[0]:
+                        s.current_text = transcribed_texts[0]
+
+        return ASRResult(
+            text=s.current_text,
+            is_partial=False,
+            is_endpoint=True,
+        )
 
     def detect_endpoint(self) -> bool:
         return False  # Task 5
