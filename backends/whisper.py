@@ -292,9 +292,13 @@ class WhisperBackend:
         if flushed:
             s.committed_text += "".join(t for _, _, t in flushed)
 
+        # Commit ALL remaining text (spec requirement)
         remaining = s.hypothesis.complete()
-        remaining_text = "".join(t for _, _, t in remaining)
-        full_text = s.committed_text + remaining_text
+        if remaining:
+            remaining_text = "".join(t for _, _, t in remaining)
+            s.committed_text += remaining_text
+
+        full_text = s.committed_text
 
         return ASRResult(
             text=full_text.strip(),
