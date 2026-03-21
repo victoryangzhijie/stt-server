@@ -173,7 +173,17 @@ class WhisperBackend:
         self._endpoint_fired: bool = False
 
     def push_audio(self, pcm_data: bytes) -> None:
-        pass  # implemented in Task 4
+        n_samples = len(pcm_data) // 2
+        if n_samples == 0:
+            return
+
+        samples_i16 = np.frombuffer(pcm_data[: n_samples * 2], dtype=np.int16)
+        audio_f32 = samples_i16.astype(np.float32) / 32768.0
+
+        self._streaming.audio_buffer = np.append(
+            self._streaming.audio_buffer, audio_f32
+        )
+        self._vad_buffer = np.append(self._vad_buffer, audio_f32)
 
     def get_partial(self) -> ASRResult | None:
         return None  # implemented in Task 5

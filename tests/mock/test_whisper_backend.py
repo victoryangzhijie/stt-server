@@ -169,3 +169,36 @@ class TestConfigureAndClose:
         backend = _make_backend()
         backend.close()
         backend.close()
+
+
+class TestPushAudio:
+    def test_push_audio_accumulates_float32(self):
+        import numpy as np
+
+        backend = _make_backend()
+        pcm = _make_pcm_tone(1600, amplitude=5000)
+        backend.push_audio(pcm)
+
+        assert backend._streaming.audio_buffer.dtype == np.float32
+        assert len(backend._streaming.audio_buffer) == 1600
+
+        expected = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        np.testing.assert_array_almost_equal(
+            backend._streaming.audio_buffer, expected
+        )
+
+    def test_push_audio_appends(self):
+        backend = _make_backend()
+        backend.push_audio(_make_pcm_tone(800))
+        backend.push_audio(_make_pcm_tone(800))
+        assert len(backend._streaming.audio_buffer) == 1600
+
+    def test_push_audio_also_fills_vad_buffer(self):
+        backend = _make_backend()
+        backend.push_audio(_make_pcm_tone(1600))
+        assert len(backend._vad_buffer) == 1600
+
+    def test_push_audio_empty_is_noop(self):
+        backend = _make_backend()
+        backend.push_audio(b"")
+        assert len(backend._streaming.audio_buffer) == 0
