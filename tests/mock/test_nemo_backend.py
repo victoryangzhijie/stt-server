@@ -258,3 +258,178 @@ class TestFinalize:
         result = backend.finalize()
         assert result.text == "already transcribed"
         self.mock_nemo.conformer_stream_step.assert_not_called()
+
+
+class TestVAD:
+    """Tests for Silero VAD-based endpoint detection.
+    Uses persistent patchers so _get_nemo_model/_get_vad_base_model remain
+    mocked when push_audio/detect_endpoint call them at runtime.
+    """
+
+    def _setup_patchers(self, mock_vad):
+        self._mock_nemo = _make_mock_nemo_model()
+        self._nemo_patcher = patch(
+            "backends.nemo._get_nemo_model", return_value=self._mock_nemo
+        )
+        self._vad_patcher = patch(
+            "backends.nemo._get_vad_base_model", return_value=mock_vad
+        )
+        self._buf_patcher = patch(
+            "backends.nemo.CacheAwareStreamingAudioBuffer",
+            return_value=_make_mock_streaming_buffer(),
+        )
+        self._nemo_patcher.start()
+        self._vad_patcher.start()
+        self._buf_patcher.start()
+
+    def _teardown_patchers(self):
+        self._nemo_patcher.stop()
+        self._vad_patcher.stop()
+        self._buf_patcher.stop()
+
+    def test_silence_does_not_trigger_speech(self):
+        mock_vad = _make_mock_vad_model(speech_prob=0.1)
+        self._setup_patchers(mock_vad)
+        try:
+            backend = _make_backend(self._mock_nemo, mock_vad)
+            backend.push_audio(_make_pcm_silence(512))
+            backend.detect_endpoint()
+            assert backend._in_speech is False
+        finally:
+            self._teardown_patchers()
+
+    def test_speech_triggers_in_speech(self):
+        mock_vad = _make_mock_vad_model(speech_prob=0.9)
+        self._setup_patchers(mock_vad)
+        try:
+            backend = _make_backend(self._mock_nemo, mock_vad)
+            backend.push_audio(_make_pcm_tone(512))
+            backend.detect_endpoint()
+            assert backend._in_speech is True
+        finally:
+            self._teardown_patchers()
+
+    def test_endpoint_after_sustained_silence(self):
+        call_count = [0]
+        speech_chunks = 2
+        def _vad_side_effect(chunk, sr):
+            call_count[0] += 1
+            prob = 0.9 if call_count[0] <= speech_chunks else 0.1
+            result = MagicMock()
+            result.item.return_value = prob
+            return result
+
+        mock_vad = MagicMock()
+        mock_vad.side_effect = _vad_side_effect
+        mock_vad.reset_states = MagicMock()
+
+        self._setup_patchers(mock_vad)
+        try:
+            backend = _make_backend(self._mock_nemo, mock_vad)
+            backend.push_audio(_make_pcm_tone(1024))
+            backend.detect_endpoint()
+            assert backend._in_speech is True
+            backend.push_audio(_make_pcm_silence(8192))
+            result = backend.detect_endpoint()
+            assert result is True
+        finally:
+            self._teardown_patchers()
+
+    def test_endpoint_fires_once(self):
+        call_count = [0]
+        speech_chunks = 2
+        def _vad_side_effect(chunk, sr):
+            call_count[0] += 1
+            prob = 0.9 if call_count[0] <= speech_chunks else 0.1
+            result = MagicMock()
+            result.item.return_value = prob
+            return result
+
+        mock_vad = MagicMock()
+        mock_vad.side_effect = _vad_side_effect
+        mock_vad.reset_states = MagicMock()
+
+        self._setup_patchers(mock_vad)
+        try:
+            backend = _make_backend(self._mock_nemo, mock_vad)
+            backend.push_audio(_make_pcm_tone(1024))
+            backend.detect_endpoint()
+            backend.push_audio(_make_pcm_silence(8192))
+            assert backend.detect_endpoint() is True
+            assert backend.detect_endpoint() is False
+        finally:
+            self._teardown_patchers()
+
+    def test_speech_resets_silence_accumulator(self):
+        call_count = [0]
+        pattern = [0.9, 0.9, 0.1, 0.1, 0.1, 0.1, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1]
+        def _vad_side_effect(chunk, sr):
+            idx = min(call_count[0], len(pattern) - 1)
+            call_count[0] += 1
+            result = MagicMock()
+            result.item.return_value = pattern[idx]
+            return result
+
+        mock_vad = MagicMock()
+        mock_vad.side_effect = _vad_side_effect
+        mock_vad.reset_states = MagicMock()
+
+        self._setup_patchers(mock_vad)
+        try:
+            backend = _make_backend(self._mock_nemo, mock_vad)
+            backend.push_audio(_make_pcm_tone(6144))
+            result = backend.detect_endpoint()
+            assert result is False
+        finally:
+            self._teardown_patchers()
+
+    def test_no_endpoint_without_speech(self):
+        mock_vad = _make_mock_vad_model(speech_prob=0.1)
+        self._setup_patchers(mock_vad)
+        try:
+            backend = _make_backend(self._mock_nemo, mock_vad)
+            backend.push_audio(_make_pcm_silence(16000))
+            assert backend.detect_endpoint() is False
+        finally:
+            self._teardown_patchers()
+
+
+class TestResetSegment:
+    def setup_method(self):
+        self.mock_nemo = _make_mock_nemo_model()
+        self.mock_vad = _make_mock_vad_model(speech_prob=0.9)
+        self.nemo_patcher = patch(
+            "backends.nemo._get_nemo_model", return_value=self.mock_nemo
+        )
+        self.vad_patcher = patch(
+            "backends.nemo._get_vad_base_model", return_value=self.mock_vad
+        )
+        self.buf_patcher = patch(
+            "backends.nemo.CacheAwareStreamingAudioBuffer",
+            return_value=_make_mock_streaming_buffer(),
+        )
+        self.nemo_patcher.start()
+        self.vad_patcher.start()
+        self.buf_patcher.start()
+
+    def teardown_method(self):
+        self.nemo_patcher.stop()
+        self.vad_patcher.stop()
+        self.buf_patcher.stop()
+
+    def test_reset_clears_all_state(self):
+        backend = _make_backend(self.mock_nemo, self.mock_vad)
+        backend.push_audio(_make_pcm_tone(1600))
+        backend.detect_endpoint()
+
+        old_streaming = backend._streaming
+        backend.reset_segment()
+
+        assert backend._streaming is not old_streaming
+        assert backend._streaming.current_text == ""
+        assert backend._streaming.previous_hypotheses is None
+        assert backend._streaming.previous_pred_out is None
+        assert backend._in_speech is False
+        assert backend._silence_ms_accum == 0.0
+        assert backend._endpoint_fired is False
+        assert len(backend._vad_buffer) == 0
