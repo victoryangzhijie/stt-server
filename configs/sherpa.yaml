@@ -1,0 +1,36 @@
+# CPU streaming flagship profile. See docs/backends.md#sherpa_onnx for
+# extras install + model download commands.
+server:
+  host: 0.0.0.0
+  port: 8000
+vad:
+  # silero (not energy) is deliberate here: this profile is meant to show
+  # off production-quality endpointing alongside a production-quality ASR
+  # backend. Requires models/silero_vad.onnx — see
+  # `python scripts/download_models.py silero`.
+  kind: silero
+  model_path: models/silero_vad.onnx
+  threshold: 0.5
+endpointing:
+  pre_roll_ms: 300
+  min_silence_ms: 500
+  max_utterance_ms: 30000
+stabilizer:
+  min_partials: 2
+  min_stable_ms: 400.0
+backends:
+  sherpa:
+    type: sherpa_onnx
+    options:
+      # Directory produced by
+      # `python scripts/download_models.py sherpa-zipformer-en` (the
+      # streaming Zipformer release archive extracted under models/).
+      model_dir: models/sherpa-onnx-streaming-zipformer-en-2023-06-26
+      num_threads: 4
+      # Size of the backend's shared ThreadPoolExecutor, which every decode
+      # call runs on (onnxruntime releases the GIL, so this gets real
+      # parallelism across concurrent streams). See docs/backends.md §2.5.
+      pool_workers: 8
+      language: en
+models:
+  sherpa-zipformer-en: sherpa

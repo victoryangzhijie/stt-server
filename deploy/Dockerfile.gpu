@@ -1,0 +1,48 @@
+# GPU image: qwen3asr backend (vLLM + CUDA).
+#
+# Uses the CUDA *runtime* (not devel) base image; Python 3.12 is provisioned
+# by uv itself (`uv python install`) rather than relying on the distro's
+# python3, since Ubuntu 22.04 ships 3.10 by default.
+
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_PYTHON_PREFERENCE=only-managed
+
+RUN uv python install 3.12
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+
+RUN uv sync --frozen --no-install-project --python 3.12 --extra qwen3asr
+
+COPY src ./src
+COPY README.md ./README.md
+
+RUN uv sync --frozen --python 3.12 --extra qwen3asr
+
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
+
+RUN groupadd --system stt && useradd --system --gid stt --create-home stt
+
+WORKDIR /app
+
+COPY --from=builder --chown=stt:stt /opt/uv/python /opt/uv/python
+COPY --from=builder --chown=stt:stt /app/.venv /app/.venv
+COPY --from=builder --chown=stt:stt /app/src /app/src
+COPY --chown=stt:stt configs ./configs
+
+ENV PATH="/app/.venv/bin:${PATH}"
+# STT__-prefixed environment variables override the mounted YAML config at
+# startup (see src/stt_server/config/settings.py).
+
+VOLUME ["/app/models"]
+EXPOSE 8000
+
+USER stt
+
+ENTRYPOINT ["stt-server"]
+CMD ["--config", "/app/configs/qwen3asr.yaml", "--host", "0.0.0.0"]

@@ -1,0 +1,41 @@
+# GPU flagship profile. Requires a CUDA GPU + the qwen3asr extra (vLLM
+# backend); NOT run/verified on this repo's CPU-only development machine —
+# see docs/backends.md#qwen3asr for the honest verified-on note (deferred
+# to Plan 4).
+server:
+  host: 0.0.0.0
+  port: 8000
+vad:
+  # silero, same rationale as configs/sherpa.yaml: pair a production ASR
+  # backend with production-quality endpointing.
+  kind: silero
+  model_path: models/silero_vad.onnx
+  threshold: 0.5
+endpointing:
+  pre_roll_ms: 300
+  min_silence_ms: 500
+  max_utterance_ms: 30000
+stabilizer:
+  min_partials: 2
+  min_stable_ms: 400.0
+backends:
+  qwen3asr:
+    type: qwen3asr
+    options:
+      # Pulled from the Hugging Face Hub by the qwen_asr/transformers stack
+      # itself on first backend.start() — no scripts/download_models.py
+      # entry for this one (unlike sherpa/funasr).
+      model: Qwen/Qwen3-ASR-0.6B
+      gpu_memory_utilization: 0.8
+      # Size of the backend's shared ThreadPoolExecutor (vLLM's `LLM` class
+      # is synchronous/blocking under the hood, not an async engine — see
+      # docs/backends.md §2.5), mirroring `pool_workers` in the other
+      # backends.
+      max_concurrent: 8
+      language: null
+      # Passed straight through to the framework's own
+      # init_streaming_state(chunk_size_sec=redecode_interval_ms / 1000.0):
+      # how often the adapter re-decodes the accumulated utterance audio.
+      redecode_interval_ms: 480
+models:
+  qwen3-asr-0.6b: qwen3asr

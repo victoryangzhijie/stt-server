@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environment / secrets
+.env
+.env.*
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI-assistant scratch state (session-local, never published)
+.superpowers/
+.claude/
+
+# Downloaded model weights (see scripts/download_models.py)
+models/
+
+# Benchmark corpus and run outputs (see benchmarks/README.md)
+benchmarks/data/
+benchmarks/results/
+
+# Logs
+*.log

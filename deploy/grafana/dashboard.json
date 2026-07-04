@@ -1,0 +1,133 @@
+{
+  "title": "stt-server",
+  "uid": "stt-server-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active sessions",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "stt_sessions_active",
+          "legendFormat": "active",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Audio seconds ingested (rate by api)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 18, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (api) (rate(stt_audio_seconds_ingested_total[5m]))",
+          "legendFormat": "{{api}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "First-partial latency (p50 / p95) by backend",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, backend) (rate(stt_first_partial_latency_ms_bucket[5m])))",
+          "legendFormat": "p50 {{backend}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, backend) (rate(stt_first_partial_latency_ms_bucket[5m])))",
+          "legendFormat": "p95 {{backend}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Final latency (p50 / p95) by backend",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, backend) (rate(stt_final_latency_ms_bucket[5m])))",
+          "legendFormat": "p50 {{backend}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, backend) (rate(stt_final_latency_ms_bucket[5m])))",
+          "legendFormat": "p95 {{backend}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Utterance rate by backend / end reason",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (backend, end_reason) (rate(stt_utterances_total[5m]))",
+          "legendFormat": "{{backend}}/{{end_reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Rejection rate by reason",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(stt_rejections_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Error rate by code",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (code) (rate(stt_errors_total[5m]))",
+          "legendFormat": "{{code}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: stt-server
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["stt-server:8000"]

@@ -1,0 +1,35 @@
+# Second real backend profile (Mandarin-primary, EN secondary). See
+# docs/backends.md#funasr for extras install + model pre-warm commands.
+server:
+  host: 0.0.0.0
+  port: 8000
+vad:
+  # energy (not silero) is deliberate here: it keeps this config
+  # dependency-light — no onnxruntime/silero model download required just
+  # to try the funasr backend. Switch to silero (see configs/sherpa.yaml)
+  # for better endpointing quality in production.
+  kind: energy
+  threshold_dbfs: -40.0
+endpointing:
+  pre_roll_ms: 300
+  min_silence_ms: 500
+  max_utterance_ms: 30000
+stabilizer:
+  min_partials: 2
+  min_stable_ms: 400.0
+backends:
+  funasr:
+    type: funasr
+    options:
+      model: paraformer-zh-streaming
+      # Size of the backend's shared ThreadPoolExecutor every generate()
+      # call runs on (a synchronous, blocking torch call).
+      pool_workers: 4
+      # FunASR's streaming chunk convention: chunk_size[1] (10) is the
+      # decode-chunk length in 60 ms units, i.e. 600 ms / 9600 samples /
+      # 19200 PCM16 bytes per generate() call at 16 kHz. See the full
+      # derivation in src/stt_server/backends/funasr/backend.py's module
+      # docstring.
+      chunk_size: [0, 10, 5]
+models:
+  paraformer-zh-streaming: funasr

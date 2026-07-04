@@ -1,0 +1,77 @@
+[project]
+name = "stt-server"
+version = "0.1.0"
+description = "OpenAI-compatible real-time STT inference server with pluggable open-source ASR backends"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "structlog>=24.4",
+    "python-multipart>=0.0.20",
+    "prometheus-client>=0.21",
+]
+
+[project.optional-dependencies]
+silero = ["onnxruntime>=1.20"]
+sherpa = ["sherpa-onnx>=1.10"]
+funasr = ["funasr>=1.2", "torch>=2.4", "torchaudio>=2.4"]
+qwen3asr = ["qwen-asr[vllm]>=0.0.6"]
+bench = ["jiwer>=3.0", "psutil>=5.9", "pynvml>=11.5", "soundfile>=0.12"]
+
+[project.scripts]
+stt-server = "stt_server.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+    "ruff>=0.8",
+]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stt_server"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-m 'not model'"
+markers = [
+    "model: requires real model weights/deps",
+    "gpu: requires CUDA",
+    "bench: requires the `bench` extra (jiwer/psutil/pynvml/soundfile) and/or is slow",
+]
+# starlette.testclient warns (StarletteDeprecationWarning, a UserWarning
+# subclass, NOT DeprecationWarning) on import that `httpx` support is
+# deprecated in favor of an as-yet-unreleased `httpx2` package; every api
+# test imports it via `from fastapi.testclient import TestClient`.
+# Identified by running `pytest -W error`, which failed collection at
+# `starlette/testclient.py:47`. The warning is raised with stacklevel=2 from
+# module-level code, so it is attributed to its direct importer
+# (`fastapi.testclient`), not to `starlette.testclient` itself — that's the
+# `module` regex target below (verified: filtering on `starlette.testclient`
+# does NOT suppress it; `fastapi.testclient` does).
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning:fastapi.testclient",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

@@ -1,0 +1,34 @@
+# Reference/default profile: the mock backend needs no model weights and no
+# optional extra, so this is the config the server (and the CPU Docker image)
+# boots by default. See docs/backends.md for the full per-backend guide.
+server:
+  host: 0.0.0.0
+  port: 8000
+vad:
+  # energy VAD: zero extra dependencies, matching the mock backend's own
+  # zero-dependency footprint. Swap for `silero` (see configs/sherpa.yaml)
+  # if you want to exercise the same VAD path production profiles use.
+  kind: energy
+  threshold_dbfs: -40.0
+endpointing:
+  pre_roll_ms: 300
+  min_silence_ms: 500
+  max_utterance_ms: 30000
+stabilizer:
+  min_partials: 2
+  min_stable_ms: 400.0
+backends:
+  mock:
+    type: mock
+    options:
+      # Interval, in accumulated *audio* milliseconds (not wall-clock time),
+      # between each scripted partial transcript (see MockStream in
+      # src/stt_server/backends/mock.py).
+      partial_interval_ms: 240
+models:
+  mock: mock
+# limits.audio_queue_chunks / limits.audio_overflow_policy are left at their
+# defaults here (64 chunks =~ 6.4s buffered at ~100ms/chunk; drop_oldest) —
+# see LimitsConfig in src/stt_server/config/settings.py for the spec §13
+# backpressure knobs; see src/stt_server/config/settings.py (LimitsConfig)
+# and docs/architecture.md §3.2 for how the bounded queue + shed policy work.

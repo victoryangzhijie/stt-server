@@ -1,0 +1,99 @@
+# Compose profiles:
+#   cpu           -> stt-server (mock/sherpa/funasr/silero backends, CPU image)
+#   gpu           -> stt-server-gpu (qwen3asr backend, needs nvidia-container-toolkit)
+#   observability -> prometheus + grafana, scraping stt-server over the
+#                    internal-only network (see README: /metrics is
+#                    unauthenticated by design and must never be published
+#                    directly to a public network).
+#
+# Run from the repo root: `docker compose -f deploy/docker-compose.yaml --profile cpu up`
+
+services:
+  stt-server:
+    profiles: ["cpu"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount the repo's models/ directory (where
+      # scripts/download_models.py puts weights on the host). Relative host
+      # paths in compose volumes resolve against the compose FILE's
+      # directory (deploy/), not the caller's cwd, so `..` is the repo root
+      # regardless of where `docker compose -f deploy/docker-compose.yaml`
+      # is invoked from.
+      - ../models:/app/models
+      # Uncomment to override the baked-in mock config, e.g. with a config
+      # that sets auth.tokens, without rebuilding the image:
+      # - ../configs/my-config.yaml:/app/configs/my-config.yaml:ro
+    environment:
+      # Pass-through STT__ overrides from the invoking shell. The bare-name
+      # form only sets the variable inside the container when it is set in
+      # the shell that runs `docker compose` — unset vars are omitted
+      # entirely (NOT set to ""), so the server falls back to the YAML
+      # config instead of trying to parse an empty override. Example:
+      #   STT__AUTH__TOKENS='["secret"]' docker compose -f deploy/docker-compose.yaml --profile cpu up
+      - STT__AUTH__TOKENS
+      - STT__SERVER__PORT
+      - STT__LIMITS__MAX_SESSIONS
+    networks:
+      - internal
+
+  stt-server-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gpu
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../models:/app/models
+    environment:
+      - STT__AUTH__TOKENS
+      - STT__SERVER__PORT
+      - STT__LIMITS__MAX_SESSIONS
+    networks:
+      - internal
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - internal
+    # Deliberately not published to the host: stt-server's /metrics
+    # endpoint is unauthenticated, so Prometheus reaches it only over this
+    # internal compose network, never through a host-published port.
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      # Default credentials for local/dev use only; override before any
+      # non-local deployment.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboard.json:/etc/grafana/dashboards/stt-server.json:ro
+    networks:
+      - internal
+    depends_on:
+      - prometheus
+
+networks:
+  internal:
+    driver: bridge
