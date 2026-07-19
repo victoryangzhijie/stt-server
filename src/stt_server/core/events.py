@@ -43,6 +43,8 @@ class TranscriptEvent:
     stable_text: str = ""  # PARTIAL: committed prefix
     volatile_text: str = ""  # PARTIAL: uncommitted tail
     text: str = ""  # FINAL: final text; STABILIZED: newly committed delta
+    # FINAL: detected language (canonical name), when the backend reports one
+    language: str | None = None
     error_code: str | None = None
     recoverable: bool = True
     message: str = ""  # human-readable detail, primarily for ERROR events

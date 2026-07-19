@@ -23,6 +23,11 @@ class BackendEvent:
     kind: Literal["partial", "final"]
     text: str
     audio_time_ms: float
+    # Detected language for FINAL events (canonical name e.g. "Chinese",
+    # "English"), when the backend knows it; None otherwise (including all
+    # partials). Propagated up so API surfaces can report what the model
+    # actually detected rather than a client hint.
+    language: str | None = None
 
 
 @dataclass(frozen=True)

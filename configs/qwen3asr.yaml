@@ -37,5 +37,16 @@ backends:
       # init_streaming_state(chunk_size_sec=redecode_interval_ms / 1000.0):
       # how often the adapter re-decodes the accumulated utterance audio.
       redecode_interval_ms: 480
+# Capacity cap (spec §13). Acquiring a session beyond max_sessions returns 429
+# immediately instead of queueing on the GPU. Sized to the backend's
+# max_concurrent decode pool: the qwen3asr/vLLM backend serializes generate()
+# calls (see src/stt_server/backends/qwen3asr/backend.py), so accepting more
+# than this many concurrent sessions only piles up waiters. Tune up only if
+# your GPU sustains higher concurrency (it does not on an A10 for ~5s
+# utterances). Also bounded per-request by max_session_seconds, enforced for
+# file uploads in src/stt_server/api/transcriptions_http.py.
+limits:
+  max_sessions: 8
+  max_session_seconds: 300.0
 models:
   qwen3-asr-0.6b: qwen3asr

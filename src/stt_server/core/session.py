@@ -98,6 +98,7 @@ class Session:
         self._stabilizer: Stabilizer | None = None
         self._utterance_started_ts = 0.0
         self._first_partial_ms: float | None = None
+        self._final_language: str | None = None
         self._ended = False
         self._input_ended = False
 
@@ -278,6 +279,7 @@ class Session:
             self._stabilizer = self._stabilizer_factory()
             self._utterance_started_ts = time.monotonic()
             self._first_partial_ms = None
+            self._final_language = None
             self._emit(EventType.SPEECH_START)
             self._reader = asyncio.create_task(self._read_backend(self._stream))
             for frame in action.frames:
@@ -327,7 +329,8 @@ class Session:
             latency = {"final_ms": (time.monotonic() - endpoint_ts) * 1000.0}
             if self._first_partial_ms is not None:
                 latency["first_partial_ms"] = self._first_partial_ms
-            self._emit(EventType.FINAL, text=final_text, latency=latency)
+            self._emit(EventType.FINAL, text=final_text, latency=latency,
+                       language=self._final_language)
             self.stats.utterances += 1
             self.stats.final_latencies_ms.append(latency["final_ms"])
             if self._metrics_labels is not None:
@@ -386,6 +389,7 @@ class Session:
                     self._emit(EventType.STABILIZED, text=upd.newly_committed)
             else:
                 final_text = bev.text
+                self._final_language = bev.language
         return final_text
 
     def _emit(self, type_: EventType, **kwargs) -> None:

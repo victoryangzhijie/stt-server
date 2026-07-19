@@ -1,9 +1,11 @@
+import asyncio
 import json
 
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
 
 from stt_server.api.app import UploadSizeGuardMiddleware, create_app
+from stt_server.api.transcriptions_http import transcriptions
 from stt_server.config.settings import AuthConfig, LimitsConfig
 from stt_server.metrics.registry import AUDIO_SECONDS, REJECTIONS, UTTERANCES
 from tests.api.test_native_ws import make_test_settings
@@ -295,3 +297,141 @@ def test_upload_too_large_increments_rejections_counter():
         post(client)  # pre-read Content-Length check
         post(client, headers={"content-length": "1"})  # post-read check
     assert REJECTIONS.labels(reason="upload_too_large")._value.get() == 2.0
+
+
+# -- regressions for concurrent-upload findings --
+#   * slot leak when a client disconnects mid-decode (wedged the server:
+#     `stt_sessions_active` climbed and stuck, blocking all new requests)
+#   * verbose_json reporting a hardcoded "en" instead of the detected language
+
+
+async def test_file_slot_released_when_client_disconnects_mid_decode():
+    """A client that disconnects during a slow decode must free its capacity
+    slot (the handler returns 499) instead of holding it forever."""
+    from stt_server.backends.base import (
+        BackendCapabilities,
+        StreamConfig,
+        SttBackend,
+        SttStream,
+    )
+    from stt_server.backends.registry import register_backend
+    from stt_server.config.settings import BackendDef
+
+    class SlowStream(SttStream):
+        async def push_audio(self, chunk):  # a decode that outlasts the poll
+            await asyncio.sleep(10)
+
+        async def events(self):  # never yields: feeder is stuck in push_audio
+            if False:
+                yield  # pragma: no cover -- makes this an async generator
+            await asyncio.Event().wait()
+
+        async def finalize(self):
+            await asyncio.sleep(10)
+
+        async def close(self):
+            pass
+
+    @register_backend("vslow")
+    class VSlowBackend(SttBackend):
+        name = "vslow"
+        capabilities = BackendCapabilities(streaming=True, languages=("en",))
+
+        async def start(self): ...
+
+        async def stop(self): ...
+
+        async def create_stream(self, cfg: StreamConfig):
+            return SlowStream()
+
+    s = make_test_settings()
+    s.limits = LimitsConfig(max_sessions=8, max_session_seconds=300.0)
+    s.backends["vslow"] = BackendDef(type="vslow")
+    s.models["vslow"] = "vslow"
+    app = create_app(s)
+    # Lifespan (which populates app.state.backends) doesn't run for a direct
+    # handler call; VSlowBackend.start() is a no-op, so wire the registry by hand.
+    app.state.backends = {"vslow": VSlowBackend()}
+    app.state.ready = True
+
+    class FakeFile:
+        async def read(self):
+            return make_wav(make_tone(600) + make_silence(300))
+
+    class FakeRequest:
+        def __init__(self, app):
+            self.app = app
+            self._polls = 0
+
+        async def is_disconnected(self):
+            self._polls += 1
+            return self._polls > 1  # report disconnected on the 2nd poll
+
+    req = FakeRequest(app)
+    assert app.state.slots.active == 0
+    resp = await transcriptions(req, FakeFile(), "vslow")
+    assert resp.status_code == 499
+    # slot released despite the mid-decode disconnect (the regression)
+    assert app.state.slots.active == 0
+
+
+def test_verbose_json_reports_detected_language():
+    """verbose_json must report the language the backend detected, not the old
+    hardcoded `language or 'en'` (which returned 'en' for Chinese audio)."""
+    from stt_server.backends.base import (
+        BackendCapabilities,
+        BackendEvent,
+        StreamConfig,
+        SttBackend,
+        SttStream,
+    )
+    from stt_server.backends.registry import register_backend
+    from stt_server.config.settings import BackendDef
+
+    class LangStream(SttStream):
+        def __init__(self):
+            self._q: asyncio.Queue = asyncio.Queue()
+
+        async def push_audio(self, chunk):
+            pass  # accept frames; emit nothing until finalize
+
+        async def events(self):
+            while True:
+                ev = await self._q.get()
+                if ev is None:
+                    return
+                yield ev
+
+        async def finalize(self):
+            await self._q.put(
+                BackendEvent(
+                    kind="final", text="你好", audio_time_ms=300.0, language="Chinese"
+                )
+            )
+            await self._q.put(None)
+
+        async def close(self):
+            await self._q.put(None)
+
+    @register_backend("langful")
+    class LangBackend(SttBackend):
+        name = "langful"
+        capabilities = BackendCapabilities(streaming=True, languages=("zh",))
+
+        async def start(self): ...
+
+        async def stop(self): ...
+
+        async def create_stream(self, cfg: StreamConfig):
+            return LangStream()
+
+    s = make_test_settings()
+    s.backends["langful"] = BackendDef(type="langful")
+    s.models["langful"] = "langful"
+    app = create_app(s)
+    with TestClient(app) as client:
+        r = post(client, model="langful", data={"response_format": "verbose_json"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["language"] == "Chinese"  # detected, not the old hardcoded "en"
+    assert j["text"] == "你好"

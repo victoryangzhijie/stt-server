@@ -7,6 +7,7 @@ GPU/venv-pinned backends (sherpa, funasr), a specific interpreter — see the
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -73,11 +74,22 @@ class ServerUnderTest:
         fd, log_name = tempfile.mkstemp(prefix=f"stt-server-{self.port}-", suffix=".log")
         self.log_path = Path(log_name)
         self._log_file = os.fdopen(fd, "wb")
+        # `start_new_session=True` puts the server in its own process
+        # group/session (setsid). The qwen3asr backend's vLLM engine spawns an
+        # `EngineCore` child process (multiprocessing spawn) that holds the
+        # GPU's KV-cache memory; vLLM's `LLM` exposes no public close() and the
+        # child is reaped only on clean interpreter exit, NOT on SIGTERM. A
+        # signal to just the parent therefore orphans EngineCore -- measured
+        # directly: a SIGTERM'd server left EngineCore alive holding ~16.6 GiB,
+        # OOMing the next server boot ("Free memory ... less than desired GPU
+        # memory utilization"). Starting in a new session lets `_terminate`
+        # kill the whole group (server + EngineCore) via killpg.
         self._proc = subprocess.Popen(
             cmd,
             env={**os.environ, **(self.env or {})},
             stdout=self._log_file,
             stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         try:
             self._wait_ready(timeout_s=self.ready_timeout_s)
@@ -115,10 +127,24 @@ class ServerUnderTest:
     def _terminate(self) -> None:
         proc = self._proc
         if proc is not None and proc.poll() is None:
-            proc.send_signal(signal.SIGTERM)
+            # Kill the whole process group (set up by start_new_session=True in
+            # __enter__), not just the parent: the qwen3asr/vLLM backend spawns
+            # an EngineCore child that survives a parent-only SIGTERM and leaks
+            # GPU memory (see __enter__). killpg(getpgid(pid)) reaches it.
+            try:
+                pgid = os.getpgid(proc.pid)
+            except ProcessLookupError:
+                pgid = None
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGTERM)
+            else:
+                proc.send_signal(signal.SIGTERM)
             try:
                 proc.wait(timeout=10.0)
             except subprocess.TimeoutExpired:
+                if pgid is not None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(pgid, signal.SIGKILL)
                 proc.kill()
                 proc.wait(timeout=10.0)
         if self._log_file is not None:

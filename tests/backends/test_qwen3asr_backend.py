@@ -52,6 +52,7 @@ def _bare_backend(redecode_interval_ms: float = 480):
     backend._redecode_interval_ms = redecode_interval_ms
     backend._model_instance = None
     backend._executor = None
+    backend._decode_lock = threading.Lock()
     return backend
 
 
@@ -159,7 +160,7 @@ def _make_stream(engine, chunk_size_sec=0.1):
 
     executor = ThreadPoolExecutor(max_workers=4)
     state = engine.init_streaming_state(chunk_size_sec=chunk_size_sec)
-    stream = Qwen3AsrStream(engine, executor, state)
+    stream = Qwen3AsrStream(engine, executor, state, threading.Lock())
     return stream, executor, state
 
 
@@ -414,14 +415,16 @@ async def test_close_waits_for_inflight_decode_and_sentinel_is_last():
         executor.shutdown(wait=True)
 
 
-async def test_max_concurrent_bounds_concurrent_decodes():
-    # A shared ThreadPoolExecutor(max_workers=max_concurrent) is the actual
-    # concurrency bound (see module docstring: the real Qwen3ASRModel.LLM
-    # wrapper is synchronous, so there is no async engine to bound with a
-    # Semaphore instead). Verify at most `max_concurrent` blocking decodes
-    # run at once across several concurrent streams sharing one executor.
-    max_concurrent = 2
-    executor = ThreadPoolExecutor(max_workers=max_concurrent)
+async def test_decode_lock_serializes_concurrent_generate_calls():
+    # vLLM's synchronous LLM.generate() is unsafe under concurrent thread
+    # invocation (its V1 SyncMPClient correlates requests/outputs in shared
+    # state), so the backend holds a single threading.Lock across every
+    # generate() call. Verify that across several concurrent streams sharing
+    # one backend lock, at most ONE generate() (streaming_transcribe here) is
+    # ever in flight at a time -- the lock, not the executor's max_workers, is
+    # the real concurrency bound (and prevents the cross-request prompt-scaffold
+    # contamination seen under concurrent file uploads).
+    executor = ThreadPoolExecutor(max_workers=4)
     engine = _FakeQwen3AsrEngine()
     in_flight = 0
     max_seen = 0
@@ -442,8 +445,11 @@ async def test_max_concurrent_bounds_concurrent_decodes():
 
     from stt_server.backends.qwen3asr.backend import Qwen3AsrStream
 
+    decode_lock = threading.Lock()  # the backend-wide lock, shared by all streams
     streams = [
-        Qwen3AsrStream(engine, executor, engine.init_streaming_state(chunk_size_sec=0.1))
+        Qwen3AsrStream(
+            engine, executor, engine.init_streaming_state(chunk_size_sec=0.1), decode_lock
+        )
         for _ in range(4)
     ]
     try:
@@ -453,8 +459,8 @@ async def test_max_concurrent_bounds_concurrent_decodes():
             )
             for s in streams
         ]
-        await asyncio.sleep(0.3)  # let all 4 attempt to enter the executor
-        assert max_seen <= max_concurrent
+        await asyncio.sleep(0.3)  # let all 4 attempt their decode
+        assert max_seen == 1, "decode lock must serialize generate() calls"
         release.set()
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
     finally:

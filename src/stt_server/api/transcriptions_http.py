@@ -58,8 +58,17 @@ def _err(
                         headers=headers)
 
 
-async def run_file_session(app, model: str, pcm: bytes,
-                           language: str | None) -> list[TranscriptEvent]:
+class _ClientDisconnected(Exception):
+    """Client closed the connection before the file decode completed."""
+
+
+class _SessionTimeout(Exception):
+    """File request exceeded `limits.max_session_seconds` while decoding."""
+
+
+async def run_file_session(
+    app, request: Request, model: str, pcm: bytes, language: str | None
+) -> list[TranscriptEvent]:
     from stt_server.api.app import resolve_backend  # local import: avoid cycle
 
     backend = resolve_backend(app, model)
@@ -82,25 +91,60 @@ async def run_file_session(app, model: str, pcm: bytes,
         async for ev in session.events():
             events.append(ev)
 
-    task = asyncio.create_task(collect())
-    try:
+    async def drive() -> None:
         await session.push_audio(AudioChunk(data=pcm, ingest_ts=time.monotonic()))
         await session.end_input()
-        await task
+        await collect_task
+
+    collect_task = asyncio.create_task(collect())
+    drive_task = asyncio.create_task(drive())
+    # File mode has no WS-style receive loop to notice a departed client or an
+    # expired deadline: the whole upload is pushed, then the handler blocks on
+    # the decode. Without this supervisor a slow/wedged decode -- or a client
+    # that walked away mid-decode -- holds the session (and its capacity slot)
+    # forever. Measured: under 3-way concurrent uploads with client timeouts,
+    # `stt_sessions_active` climbed to 4 and stuck, wedging the server for all
+    # new requests. Poll disconnect + deadline; on either, abort the session so
+    # the caller's `finally: slots.release()` actually runs.
+    deadline = time.monotonic() + settings.limits.max_session_seconds
+    abort_reason: str | None = None
+    try:
+        while not drive_task.done():
+            await asyncio.wait({drive_task}, timeout=0.5)
+            if drive_task.done():
+                break
+            if await request.is_disconnected():
+                abort_reason = "client_disconnected"
+                break
+            if time.monotonic() > deadline:
+                abort_reason = "session_timeout"
+                break
+        if abort_reason is not None and not drive_task.done():
+            drive_task.cancel()
+            with contextlib.suppress(BaseException):
+                await drive_task
+            with contextlib.suppress(BaseException):
+                await session.abort()
     except BaseException:
-        await session.abort()
+        with contextlib.suppress(BaseException):
+            await session.abort()
         raise
     finally:
-        if not task.done():
-            task.cancel()
+        if not collect_task.done():
+            collect_task.cancel()
             with contextlib.suppress(BaseException):
-                await task
+                await collect_task
         log.info(
             "session.summary",
             audio_seconds=session.stats.audio_seconds,
             utterance_count=session.stats.utterances,
             final_latencies_ms=session.stats.final_latencies_ms,
+            abort_reason=abort_reason,
         )
+    if abort_reason == "session_timeout":
+        raise _SessionTimeout()
+    if abort_reason == "client_disconnected":
+        raise _ClientDisconnected()
     return events
 
 
@@ -145,9 +189,18 @@ async def transcriptions(
         except UnsupportedFormatError as exc:
             return _err(400, "unsupported_format", str(exc))
         try:
-            events = await run_file_session(app, model, pcm, language)
+            events = await run_file_session(app, request, model, pcm, language)
         except BackendUnavailableError as exc:
             return _err(404, "model_not_found", str(exc))
+        except _SessionTimeout:
+            return _err(503, "session_timeout",
+                        "transcription exceeded max session duration")
+        except _ClientDisconnected:
+            # Client is gone and won't read a body; the slot is already freed by
+            # the outer `finally`. 499 keeps the access log honest (NGINX-style
+            # "client closed request").
+            return _err(499, "client_disconnected",
+                        "client disconnected before transcription completed")
     finally:
         app.state.slots.release()
 
@@ -175,9 +228,14 @@ async def transcriptions(
         for i, f in enumerate(finals)
     ]
     duration = len(pcm) / 2 / SAMPLE_RATE
+    # Report the language the model actually detected (carried on FINAL events
+    # from the backend), not a hardcoded "en" / the client hint: the previous
+    # `language or "en"` returned "en" for Chinese audio. Fall back to the
+    # client-supplied hint only if the backend didn't detect one.
+    detected_lang = next((f.language for f in reversed(finals) if f.language), None)
     return {
         "task": "transcribe",
-        "language": language or "en",
+        "language": detected_lang or language,
         "duration": duration,
         "text": text,
         "segments": segments,
