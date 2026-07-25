@@ -11,6 +11,9 @@
 services:
   stt-server:
     profiles: ["cpu"]
+    # Self-heal: restart on crash/OOM/host reboot. A deliberate `docker stop`
+    # or `compose down`/`stop` is still honored (stays down until `up`).
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -42,6 +45,9 @@ services:
 
   stt-server-gpu:
     profiles: ["gpu"]
+    # Self-heal: restart on crash/OOM/host reboot. A deliberate `docker stop`
+    # or `compose down`/`stop` is still honored (stays down until `up`).
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gpu
