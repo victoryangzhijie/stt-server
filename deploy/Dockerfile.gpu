@@ -6,6 +6,16 @@
 
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
 
+# huggingface.co is unreachable from CN networks; the build fetches the silero
+# VAD onnx (below) via this mirror. Override with --build-arg elsewhere.
+ARG HF_ENDPOINT=https://hf-mirror.com
+# uv.lock pins each wheel to a files.pythonhosted.org URL, so a `--frozen`
+# `uv sync` downloads from pypi's CDN (~77 KB/s on CN networks). Below we
+# export the lock to pinned requirements and `uv pip install` them from this
+# mirror — the mirror serves the same wheels and the recorded hashes still
+# verify. Override to https://pypi.org/simple where pypi is fast.
+ARG UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
@@ -17,14 +27,42 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --no-install-project --python 3.12 --extra qwen3asr
+# Export the locked deps (qwen3asr + silero extras, versions + hashes) to a
+# pinned requirements file, then install them from UV_INDEX_URL (see ARG
+# above). `uv pip install` does NOT rewrite uv.lock, and downloads from the
+# configured index rather than the files.pythonhosted.org URLs a `--frozen`
+# `uv sync` would use. silero extra: configs/qwen3asr.yaml uses vad.kind: silero,
+# which needs onnxruntime (NOT pulled by qwen3asr) — without it the container
+# crashes in vad_silero.SileroVad.__init__ at startup.
+RUN uv export --frozen --extra qwen3asr --extra silero --no-emit-project -o /tmp/reqs.txt \
+ && uv venv --python 3.12 /app/.venv \
+ && VIRTUAL_ENV=/app/.venv uv pip install --index-url "$UV_INDEX_URL" -r /tmp/reqs.txt
 
 COPY src ./src
 COPY README.md ./README.md
 
-RUN uv sync --frozen --python 3.12 --extra qwen3asr
+# Install the project itself (editable); its dependencies are already satisfied.
+RUN VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e .
+
+# Bake the silero VAD v5 onnx (~2.2 MiB) into the image. The GitHub LFS raw URL
+# serves a truncated 119 KB file on CN networks, so fetch from the HF mirror via
+# the venv's urllib (no curl needed) and assert the size. Lives at /opt (outside
+# any volume mount) so it is never masked by the /app/models mount.
+RUN mkdir -p /opt/silero \
+ && /app/.venv/bin/python -c "import os,urllib.request as u; p='/opt/silero/silero_vad.onnx'; u.urlretrieve('${HF_ENDPOINT}/onnx-community/silero-vad/resolve/main/onnx/model.onnx', p); s=os.path.getsize(p); print('silero onnx', s, 'bytes'); assert s > 1000000, 'silero onnx looks truncated'"
 
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
+
+# vLLM 0.14 with enforce_eager=False JIT-compiles triton/inductor kernels via
+# torch.compile at startup (CUDA-graph capture); triton/runtime/build.py needs a
+# C compiler for that, and the cuda *runtime* base ships none (it crashed with
+# "Failed to find C compiler"). Install build-essential via the aliyun ubuntu
+# mirror (fast on CN networks) — triton vendors its own CUDA headers, so it only
+# needs cc + libc headers; libcuda comes from the host at runtime via the nvidia
+# runtime. (Runtime base + gcc, not the ~4.5 GB devel base, keeps the image ~7 GB.)
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g; s|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list \
+ && apt-get update && apt-get install -y --no-install-recommends build-essential \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system stt && useradd --system --gid stt --create-home stt
 
@@ -33,11 +71,23 @@ WORKDIR /app
 COPY --from=builder --chown=stt:stt /opt/uv/python /opt/uv/python
 COPY --from=builder --chown=stt:stt /app/.venv /app/.venv
 COPY --from=builder --chown=stt:stt /app/src /app/src
+COPY --from=builder --chown=stt:stt /opt/silero /opt/silero
 COPY --chown=stt:stt configs ./configs
 
-ENV PATH="/app/.venv/bin:${PATH}"
-# STT__-prefixed environment variables override the mounted YAML config at
-# startup (see src/stt_server/config/settings.py).
+# STT__VAD__MODEL_PATH points the silero VAD at the baked onnx at /opt (outside
+# the bind-mounted /app/models, so the config default models/silero_vad.onnx is
+# never relied on). HF_ENDPOINT: huggingface.co is unreachable from CN networks,
+# so pull weights via the mirror.
+# STT__-prefixed vars override the mounted YAML config at startup
+# (see src/stt_server/config/settings.py).
+ENV PATH="/app/.venv/bin:${PATH}" \
+    STT__VAD__MODEL_PATH=/opt/silero/silero_vad.onnx \
+    HF_ENDPOINT=https://hf-mirror.com
+
+# Pre-create the HF cache dir owned by `stt` so the compose `stt-hf-cache`
+# named volume mounts writable, persisting the ~1.2 GiB Qwen3-ASR-0.6B weights
+# across container recreation (the default cache location for a non-root user).
+RUN mkdir -p /home/stt/.cache/huggingface && chown -R stt:stt /home/stt/.cache
 
 VOLUME ["/app/models"]
 EXPOSE 8000

@@ -24,7 +24,7 @@ and the **Project status** section below for what's implemented vs. pending.
 | mock | `mock` | none (base install) | pure asyncio | continuous — default backend for the whole test suite |
 | sherpa-onnx | `sherpa_onnx` | `sherpa` | dedicated `ThreadPoolExecutor` | real model, macOS CPU, real transcript ("CANOE SLID") |
 | FunASR | `funasr` | `funasr` | bounded `ThreadPoolExecutor` | real model, macOS CPU, real Mandarin transcript (manual) |
-| Qwen3-ASR | `qwen3asr` | `qwen3asr` | bounded `ThreadPoolExecutor` (vLLM's sync `LLM`, not an async engine) | **not run** — no local CUDA; deferred to Plan 4 |
+| Qwen3-ASR | `qwen3asr` | `qwen3asr` | bounded `ThreadPoolExecutor` (vLLM's sync `LLM`, not an async engine) | real model, NVIDIA A10 (Docker `gpu` profile); see `GPU_VERIFICATION_REPORT.md` |
 
 See [`docs/backends.md`](docs/backends.md) for the plugin contract, how to
 write a backend, the conformance test suite, execution-strategy rationale,
@@ -54,10 +54,38 @@ Smoke-test it once it's up:
 
     curl http://localhost:8000/healthz
 
-A GPU image (qwen3asr backend, requires the NVIDIA Container Toolkit) is
-available under the `gpu` profile:
+### GPU (qwen3asr / vLLM, CUDA)
+
+The `gpu` profile builds the qwen3asr image on a `nvidia/cuda:…-runtime` base,
+runs the qwen3asr (vLLM) backend, and needs an NVIDIA GPU plus the NVIDIA
+Container Toolkit. **One-time host prep** — wire the `nvidia` runtime into
+Docker (driver must already be installed; `nvidia-smi` must work on the host):
+
+    sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+    docker run --rm --gpus all ubuntu:24.04 nvidia-smi   # should list the GPU
+
+Bring it up. The first build pulls vLLM + torch CUDA wheels (budget ~15-30 min),
+and the first boot downloads the ~1.2 GiB `Qwen/Qwen3-ASR-0.6B` weights, so allow
+a few extra minutes before the server is ready:
 
     docker compose -f deploy/docker-compose.yaml --profile gpu up --build
+
+`/readyz` flips to `ready` once vLLM finishes init + a startup warmup decode
+(~75 s). Then smoke-test end to end — the script uploads the committed speech
+fixture as a WAV and prints the transcript, end-to-end latency, and the GPU
+memory/utilization peak during the request:
+
+    curl -s http://localhost:8000/readyz
+    python3 scripts/gpu_smoke.py
+
+The silero VAD onnx is baked into the image (at `/opt`, pointed to by
+`STT__VAD__MODEL_PATH`) and the Qwen weight cache lives in a named volume
+(`stt-hf-cache`), so subsequent `up --build` cycles reuse the download rather
+than re-fetching it. On networks where `huggingface.co` is reachable, override
+the baked `HF_ENDPOINT` mirror by setting it in the service's `environment:`
+list. See [`GPU_VERIFICATION_REPORT.md`](GPU_VERIFICATION_REPORT.md) and
+[`benchmarks/cuda_runbook.md`](benchmarks/cuda_runbook.md) for the full GPU
+procedure and prior measurements.
 
 ### Configuration
 
@@ -76,12 +104,16 @@ this works as-is:
 (To pass through additional `STT__` variables, add them to the service's
 `environment:` list in `deploy/docker-compose.yaml`.)
 
-Model weights are not baked into the image. Download them to `models/` on
-the host — the compose file bind-mounts the repo's `models/` directory into
-the container at `/app/models` — before using the
-sherpa/funasr/silero/qwen3asr backends:
+For the **CPU** image, model weights are not baked in: download them to `models/`
+on the host — the `cpu` service bind-mounts the repo's `models/` directory into
+the container at `/app/models` — before using the sherpa/funasr/silero backends:
 
     uv run python scripts/download_models.py all
+
+The **GPU** image is different: the qwen3asr weights (`Qwen/Qwen3-ASR-0.6B`)
+are fetched automatically from the Hugging Face Hub on first boot (there is no
+`download_models.py` entry for it) and cached in the `stt-models` named volume;
+the silero VAD onnx is baked into the image.
 
 ### Observability
 
@@ -113,9 +145,9 @@ block it at the proxy, or keep the whole service on a private network).
   strategy (§3.1 of `docs/architecture.md`) — mock (continuous, the default
   for the whole test suite), sherpa-onnx and FunASR (real models, verified
   on macOS CPU with real transcripts — see the Backends table above),
-  Qwen3-ASR (implemented against the real `qwen-asr` framework API, but
-  **not run** — no local CUDA; correctness is exercised only through the
-  plugin conformance suite against the mock backend).
+  Qwen3-ASR (real model verified end-to-end on an NVIDIA A10 through the
+  Docker `gpu` profile — transcript, latency, VRAM, and concurrency
+  characterized in `GPU_VERIFICATION_REPORT.md`).
 - Three protocol adapters (native WS, OpenAI Realtime-style WS, OpenAI
   file-style HTTP) sharing one protocol-agnostic core; auth (constant-time
   bearer tokens), session/upload/duration limits, and a pre-parse upload-size
@@ -139,8 +171,8 @@ block it at the proxy, or keep the whole service on a private network).
 
 **Pending:**
 
-- GPU verification (Qwen3-ASR end-to-end, GPU load/latency numbers) awaits
-  access to a CUDA box; `scripts/run_gpu_suite.sh` plus
-  `benchmarks/cuda_runbook.md` give a one-command procedure for that box
-  once available. `docs/benchmarks/report.md`'s "GPU results (pending)"
-  section lists exactly which artifacts will fill it.
+- GPU WER/accuracy (the `run_accuracy` runner needs the LibriSpeech corpus
+  from `openslr.org`, unreachable from the verification host). Real-model
+  decode *quality* on GPU is verified (a sensible transcript from real
+  speech); a numeric WER is the one outstanding GPU artifact — see
+  `docs/benchmarks/report.md`'s "GPU results" note.

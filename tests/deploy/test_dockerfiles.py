@@ -86,8 +86,17 @@ class TestGpuDockerfile:
     def test_uv_provisions_python(self):
         assert "uv python install" in self.text
 
-    def test_uv_sync_frozen_with_qwen3asr_extra(self):
-        assert re.search(r"uv sync --frozen[^\n]*--extra qwen3asr", self.text)
+    def test_installs_qwen3asr_and_silero_extras_pinned_to_lock(self):
+        # The GPU image installs the qwen3asr extra pinned to uv.lock. It does
+        # so by exporting the lock (frozen) to requirements and `uv pip
+        # install`-ing them from the configured mirror: a `--frozen` `uv sync`
+        # would download from the files.pythonhosted.org URLs recorded in the
+        # lock (~77 KB/s on CN networks). See Dockerfile.gpu for rationale.
+        assert re.search(r"uv export --frozen[^\n]*--extra qwen3asr", self.text)
+        # silero extra too: configs/qwen3asr.yaml uses silero VAD, which needs
+        # onnxruntime (NOT pulled by qwen3asr) — without it the container
+        # crashes in vad_silero.SileroVad.__init__ at startup.
+        assert re.search(r"uv export --frozen[^\n]*--extra silero", self.text)
 
     def test_non_root_user(self):
         assert re.search(r"^USER stt\b", self.text, re.M)

@@ -48,7 +48,18 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      # Host-managed weights bind-mounted into the container at /app/models
+      # (same pattern as the cpu service; scripts/download_models.py writes
+      # here on the host). The GPU image does not read from here today — the
+      # silero VAD onnx is baked into the image and the qwen3asr weights are
+      # fetched at runtime into the HF cache below — but the mount stays for
+      # consistency with the repo's host-managed-weights convention.
       - ../models:/app/models
+      # Persist the ~1.2 GiB Qwen3-ASR-0.6B HF weight cache across `up --build`
+      # cycles. The image pre-creates /home/stt/.cache/huggingface owned by the
+      # non-root `stt` user so this named volume initializes writable; without
+      # it every container recreate would re-download the model.
+      - stt-hf-cache:/home/stt/.cache/huggingface
     environment:
       - STT__AUTH__TOKENS
       - STT__SERVER__PORT
@@ -97,3 +108,6 @@ services:
 networks:
   internal:
     driver: bridge
+
+volumes:
+  stt-hf-cache:
