@@ -38,7 +38,17 @@ Thumbs.db
 models/
 
 # Benchmark corpus and run outputs (see benchmarks/README.md)
-benchmarks/data/
+# The LibriSpeech source corpus (multi-GB) and raw run outputs stay ignored;
+# only the curated bench-audio-v1-en artifacts below are tracked. NOTE: the
+# glob form `benchmarks/data/*` (not `benchmarks/data/`) is deliberate — git
+# cannot re-include a path that lives inside a fully-ignored directory, so the
+# parent dir must remain matchable for the negation rules to take effect.
+benchmarks/data/*
+!benchmarks/data/http/
+!benchmarks/data/ws/
+!benchmarks/data/manifest.csv
+!benchmarks/data/README.md
+!benchmarks/data/validate.py
 benchmarks/results/
 
 # Logs
