@@ -1,19 +1,16 @@
 # STT benchmark summary — 2026-08-01 (qwen3asr / vLLM on A10)
 
-Backend: `qwen3-asr-0.6b` (vLLM 0.14.0, torch 2.9.1+cu128). Dataset: `bench-audio-v1-en`. 
-Bare-metal, driver 580 / CUDA 12.8. See `env.txt`.
+Backend `qwen3-asr-0.6b` (vLLM 0.14.0, torch 2.9.1+cu128). Dataset `bench-audio-v1-en` (LibriSpeech test-clean). Bare-metal, driver 580 / CUDA 12.8. Full env in `env.txt`.
 
 
-Latency definition differs by interface (this is the key to reading the table):
+Latency definition differs by interface — this is the key to reading the table:
 
-- **WS** (`run_load`): `client_final_ms` = finalization *tail* latency (end-of-stream → final), 
-so streaming hides the audio length; the SLO gate is p95(final) ≤ 2000 ms.
+- **WS** (`run_load`): `client_final_ms` = finalization *tail* (end-of-stream → final), so streaming hides audio length. SLO gate p95(final) ≤ 2000 ms.
 
-- **HTTP** (`bench_http_stt`): end-to-end per-request wall-clock (POST → full response), 
-i.e. the *full* decode, so the serial decode lock shows up directly.
+- **HTTP** (`bench_http_stt`): end-to-end per-request wall-clock (POST → full response) = the *full* decode, so the serial decode lock shows up directly.
 
 
-## Summary table
+## Load + latency matrix
 
 | iface | conc | p50(ms) | p95(ms) | p99(ms) | errors/n | gpuU% | note |
 |-------|------|---------|---------|---------|----------|-------|------|
@@ -30,21 +27,25 @@ i.e. the *full* decode, so the serial decode lock shows up directly.
 | HTTP | 4 | 5512 | 7869 | 8354 | 0/50 | 90.0 | thr=0.70 r/s |
 | HTTP | 8 | 10428 | 16233 | 16721 | 0/50 | 93.0 | thr=0.70 r/s |
 
+## Accuracy (WER, test-clean, n=100, seed=42, pace=1.0)
+
+| mode | WER | n | errors | first_partial p50 | server_final p50 | client_final p95 |
+|------|-----|---|--------|-------------------|------------------|------------------|
+| ws   | 3.37% | 100 | 0 | 242 ms | 41 ms | 82 ms |
+| file | 3.37% | 100 | 0 | — | — | — |
+
 ## Findings
 
-- **WS ladder**: `max_passing_concurrency = 7`. c=1..7 pass with p95(final) 43–142 ms 
-(far under the 2000 ms SLO). **c=8 fails on 8 capacity rejections (`limits.max_sessions=8`), 
-NOT on latency** — its p95 is still 142 ms. The serial decode lock does NOT break streaming 
-SLO until the configured session cap; the backend sustains concurrency far beyond the prior 
-“c=2 fails” hypothesis.
+1. **WS ladder `max_passing_concurrency = 7`** (not 1). c=1..7 pass, p95(final) 43–142 ms. 
+**c=8 fails on 8 capacity rejections** (`limits.max_sessions=8`), *not* latency (p95 still 142 ms). 
+The serial decode lock does not break the streaming SLO until the configured session cap.
 
-- **HTTP matrix**: 0 errors across c=1/2/4/8. Latency scales ~linearly with concurrency 
-(p50 1414→2727→5512→10428 ms) while **throughput is flat at ~0.70 r/s** — the qwen3asr serial 
-decode is the sole bottleneck; extra concurrency adds pure queueing, no throughput gain. 
-(Contrast with WS, where streaming + tail-latency metric masks this.)
+2. **HTTP matrix**: 0 errors at c=1/2/4/8. Latency scales ~linearly (p50 1414→2727→5512→10428 ms) 
+while **throughput is flat at ~0.70 r/s** — serial decode is the sole bottleneck; concurrency only adds queueing.
 
-- **GPU**: ~16.6 GB resident (vLLM KV cache, gpu_memory_utilization=0.8); util scales 40→94% 
-with load. VRAM returns cleanly to 0 between runs (no EngineCore orphans).
+3. **WER 3.37%** (ws == file, as expected — shared pipeline). Qwen3-ASR-0.6B is accurate on test-clean.
+
+4. **GPU**: ~16.6 GB resident (KV cache, gpu_memory_utilization=0.8); util 40→94% with load; VRAM returns cleanly to 0 between runs (no EngineCore orphans).
 
 
-_Result JSONs are committed verbatim (not a byte edited). WER row appended below when run completes._
+_All result JSONs committed verbatim. Source: `benchmarks/results/{load,accuracy}-*.json` (force-added past gitignore) + `reports/2026-08-01/`._
