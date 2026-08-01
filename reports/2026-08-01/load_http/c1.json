@@ -1,0 +1,436 @@
+{
+  "meta": {
+    "dataset": "bench-audio-v1-en",
+    "model": "qwen3-asr-0.6b",
+    "base_url": "http://127.0.0.1:8100",
+    "concurrency": 1,
+    "requests": 50,
+    "n_warmup_excluded": 5,
+    "warmup_ok": 5,
+    "warmup_err": 0,
+    "seed": 42,
+    "token_used": false,
+    "latency_def": "end-to-end wall-clock per HTTP request (ms), measured client-side on loopback 127.0.0.1: from just before POST to full response body received. Covers server queueing + VAD + decode + transcription (the latency a real caller observes); excludes only network transit, negligible on loopback. Errors still record an elapsed latency (up to the failure point). Percentiles are nearest-rank, matching benchmarks.results.percentiles.",
+    "started_at": "2026-08-01T13:06:37+0800",
+    "ended_at": "2026-08-01T13:07:56+0800"
+  },
+  "per_request": [
+    {
+      "file": "4507-16021-0013.wav",
+      "http_status": 200,
+      "latency_ms": 825.7400000002235,
+      "text_chars": 134,
+      "error": null,
+      "index": 0
+    },
+    {
+      "file": "260-123288-0005.wav",
+      "http_status": 200,
+      "latency_ms": 1056.8313999992824,
+      "text_chars": 179,
+      "error": null,
+      "index": 1
+    },
+    {
+      "file": "8224-274381-0003.wav",
+      "http_status": 200,
+      "latency_ms": 1045.9348029999092,
+      "text_chars": 169,
+      "error": null,
+      "index": 2
+    },
+    {
+      "file": "1320-122617-0010.wav",
+      "http_status": 200,
+      "latency_ms": 796.7830189991219,
+      "text_chars": 153,
+      "error": null,
+      "index": 3
+    },
+    {
+      "file": "2094-142345-0003.wav",
+      "http_status": 200,
+      "latency_ms": 1101.263000000472,
+      "text_chars": 166,
+      "error": null,
+      "index": 4
+    },
+    {
+      "file": "237-134493-0005.wav",
+      "http_status": 200,
+      "latency_ms": 1244.511244000023,
+      "text_chars": 149,
+      "error": null,
+      "index": 5
+    },
+    {
+      "file": "8230-279154-0007.wav",
+      "http_status": 200,
+      "latency_ms": 1864.9923749999289,
+      "text_chars": 258,
+      "error": null,
+      "index": 6
+    },
+    {
+      "file": "8555-292519-0006.wav",
+      "http_status": 200,
+      "latency_ms": 1112.4947770003928,
+      "text_chars": 133,
+      "error": null,
+      "index": 7
+    },
+    {
+      "file": "3729-6852-0034.wav",
+      "http_status": 200,
+      "latency_ms": 2033.3412349991704,
+      "text_chars": 244,
+      "error": null,
+      "index": 8
+    },
+    {
+      "file": "2300-131720-0020.wav",
+      "http_status": 200,
+      "latency_ms": 1132.680741000513,
+      "text_chars": 163,
+      "error": null,
+      "index": 9
+    },
+    {
+      "file": "1284-134647-0002.wav",
+      "http_status": 200,
+      "latency_ms": 1764.8062650005159,
+      "text_chars": 240,
+      "error": null,
+      "index": 10
+    },
+    {
+      "file": "4446-2271-0016.wav",
+      "http_status": 200,
+      "latency_ms": 1123.2213450002746,
+      "text_chars": 165,
+      "error": null,
+      "index": 11
+    },
+    {
+      "file": "3575-170457-0041.wav",
+      "http_status": 200,
+      "latency_ms": 1569.1434130003472,
+      "text_chars": 247,
+      "error": null,
+      "index": 12
+    },
+    {
+      "file": "5683-32865-0005.wav",
+      "http_status": 200,
+      "latency_ms": 1110.9524450002937,
+      "text_chars": 131,
+      "error": null,
+      "index": 13
+    },
+    {
+      "file": "3575-170457-0037.wav",
+      "http_status": 200,
+      "latency_ms": 1504.8363160003646,
+      "text_chars": 212,
+      "error": null,
+      "index": 14
+    },
+    {
+      "file": "6930-75918-0018.wav",
+      "http_status": 200,
+      "latency_ms": 1231.3561930004653,
+      "text_chars": 163,
+      "error": null,
+      "index": 15
+    },
+    {
+      "file": "1188-133604-0028.wav",
+      "http_status": 200,
+      "latency_ms": 1968.8578660006897,
+      "text_chars": 249,
+      "error": null,
+      "index": 16
+    },
+    {
+      "file": "237-134493-0016.wav",
+      "http_status": 200,
+      "latency_ms": 1135.1316010004666,
+      "text_chars": 159,
+      "error": null,
+      "index": 17
+    },
+    {
+      "file": "7021-79730-0004.wav",
+      "http_status": 200,
+      "latency_ms": 1952.9543310000008,
+      "text_chars": 249,
+      "error": null,
+      "index": 18
+    },
+    {
+      "file": "121-123852-0002.wav",
+      "http_status": 200,
+      "latency_ms": 1891.8550589987717,
+      "text_chars": 187,
+      "error": null,
+      "index": 19
+    },
+    {
+      "file": "3570-5694-0009.wav",
+      "http_status": 200,
+      "latency_ms": 1424.9014619999798,
+      "text_chars": 218,
+      "error": null,
+      "index": 20
+    },
+    {
+      "file": "1320-122617-0007.wav",
+      "http_status": 200,
+      "latency_ms": 2276.9694389990036,
+      "text_chars": 310,
+      "error": null,
+      "index": 21
+    },
+    {
+      "file": "908-31957-0004.wav",
+      "http_status": 200,
+      "latency_ms": 1598.8942779986246,
+      "text_chars": 200,
+      "error": null,
+      "index": 22
+    },
+    {
+      "file": "260-123286-0019.wav",
+      "http_status": 200,
+      "latency_ms": 1275.6083849999413,
+      "text_chars": 163,
+      "error": null,
+      "index": 23
+    },
+    {
+      "file": "4992-41806-0000.wav",
+      "http_status": 200,
+      "latency_ms": 1660.068721999778,
+      "text_chars": 239,
+      "error": null,
+      "index": 24
+    },
+    {
+      "file": "2830-3979-0001.wav",
+      "http_status": 200,
+      "latency_ms": 1785.9408740005165,
+      "text_chars": 263,
+      "error": null,
+      "index": 25
+    },
+    {
+      "file": "1089-134686-0023.wav",
+      "http_status": 200,
+      "latency_ms": 1122.8143959997396,
+      "text_chars": 193,
+      "error": null,
+      "index": 26
+    },
+    {
+      "file": "5639-40744-0022.wav",
+      "http_status": 200,
+      "latency_ms": 1498.4270519998972,
+      "text_chars": 201,
+      "error": null,
+      "index": 27
+    },
+    {
+      "file": "2830-3980-0048.wav",
+      "http_status": 200,
+      "latency_ms": 1173.0511719997594,
+      "text_chars": 159,
+      "error": null,
+      "index": 28
+    },
+    {
+      "file": "7176-88083-0021.wav",
+      "http_status": 200,
+      "latency_ms": 1500.4087729994353,
+      "text_chars": 196,
+      "error": null,
+      "index": 29
+    },
+    {
+      "file": "2300-131720-0013.wav",
+      "http_status": 200,
+      "latency_ms": 1526.3488350010448,
+      "text_chars": 218,
+      "error": null,
+      "index": 30
+    },
+    {
+      "file": "3570-5694-0007.wav",
+      "http_status": 200,
+      "latency_ms": 1187.0050910001737,
+      "text_chars": 172,
+      "error": null,
+      "index": 31
+    },
+    {
+      "file": "4507-16021-0031.wav",
+      "http_status": 200,
+      "latency_ms": 1585.7377180000185,
+      "text_chars": 183,
+      "error": null,
+      "index": 32
+    },
+    {
+      "file": "2961-960-0013.wav",
+      "http_status": 200,
+      "latency_ms": 1203.1279660004657,
+      "text_chars": 142,
+      "error": null,
+      "index": 33
+    },
+    {
+      "file": "6829-68771-0009.wav",
+      "http_status": 200,
+      "latency_ms": 1467.626139999993,
+      "text_chars": 206,
+      "error": null,
+      "index": 34
+    },
+    {
+      "file": "1580-141083-0001.wav",
+      "http_status": 200,
+      "latency_ms": 1219.5624529995257,
+      "text_chars": 191,
+      "error": null,
+      "index": 35
+    },
+    {
+      "file": "4077-13754-0002.wav",
+      "http_status": 200,
+      "latency_ms": 1990.7125680001627,
+      "text_chars": 286,
+      "error": null,
+      "index": 36
+    },
+    {
+      "file": "5105-28240-0009.wav",
+      "http_status": 200,
+      "latency_ms": 1312.4875239991525,
+      "text_chars": 181,
+      "error": null,
+      "index": 37
+    },
+    {
+      "file": "3729-6852-0004.wav",
+      "http_status": 200,
+      "latency_ms": 1721.9941330004076,
+      "text_chars": 228,
+      "error": null,
+      "index": 38
+    },
+    {
+      "file": "7729-102255-0043.wav",
+      "http_status": 200,
+      "latency_ms": 1308.3764940001856,
+      "text_chars": 173,
+      "error": null,
+      "index": 39
+    },
+    {
+      "file": "1580-141083-0006.wav",
+      "http_status": 200,
+      "latency_ms": 1294.4158369991783,
+      "text_chars": 198,
+      "error": null,
+      "index": 40
+    },
+    {
+      "file": "61-70970-0004.wav",
+      "http_status": 200,
+      "latency_ms": 1209.822228000121,
+      "text_chars": 174,
+      "error": null,
+      "index": 41
+    },
+    {
+      "file": "8463-294828-0035.wav",
+      "http_status": 200,
+      "latency_ms": 1768.046110000796,
+      "text_chars": 254,
+      "error": null,
+      "index": 42
+    },
+    {
+      "file": "1188-133604-0003.wav",
+      "http_status": 200,
+      "latency_ms": 1325.938183999824,
+      "text_chars": 184,
+      "error": null,
+      "index": 43
+    },
+    {
+      "file": "2961-961-0019.wav",
+      "http_status": 200,
+      "latency_ms": 1413.851462000821,
+      "text_chars": 184,
+      "error": null,
+      "index": 44
+    },
+    {
+      "file": "4446-2273-0010.wav",
+      "http_status": 200,
+      "latency_ms": 1432.2989219999727,
+      "text_chars": 213,
+      "error": null,
+      "index": 45
+    },
+    {
+      "file": "121-123852-0004.wav",
+      "http_status": 200,
+      "latency_ms": 1713.7553180000396,
+      "text_chars": 169,
+      "error": null,
+      "index": 46
+    },
+    {
+      "file": "4077-13751-0006.wav",
+      "http_status": 200,
+      "latency_ms": 1439.281814999049,
+      "text_chars": 220,
+      "error": null,
+      "index": 47
+    },
+    {
+      "file": "7127-75946-0028.wav",
+      "http_status": 200,
+      "latency_ms": 1794.5805409999593,
+      "text_chars": 203,
+      "error": null,
+      "index": 48
+    },
+    {
+      "file": "5142-36377-0022.wav",
+      "http_status": 200,
+      "latency_ms": 1389.1505960000359,
+      "text_chars": 220,
+      "error": null,
+      "index": 49
+    }
+  ],
+  "summary": {
+    "concurrency": 1,
+    "n": 50,
+    "n_errors": 0,
+    "error_rate": 0.0,
+    "latency_ms": {
+      "p50": 1413.851462000821,
+      "p95": 1990.7125680001627,
+      "p99": 2276.9694389990036,
+      "mean": 1441.7778383199766,
+      "n": 50
+    },
+    "throughput_req_per_s": 0.6935701235889207,
+    "wall_seconds": 72.091,
+    "gpu_mem_peak_mib": 16661.0,
+    "gpu_util_peak_pct": 88.0
+  }
+}
