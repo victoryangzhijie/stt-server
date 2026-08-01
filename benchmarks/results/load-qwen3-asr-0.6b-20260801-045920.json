@@ -1,0 +1,173 @@
+{
+  "model": "qwen3-asr-0.6b",
+  "config": "configs/qwen3asr.yaml",
+  "utterance_seconds": 15.0,
+  "start": 1,
+  "step": 1,
+  "max": 8,
+  "slo_final_ms": 2000.0,
+  "slo_pct": 95,
+  "window_seconds": 30.0,
+  "seed": 42,
+  "synthetic": false,
+  "rungs": [
+    {
+      "concurrency": 1,
+      "latency_ms": {
+        "p50": 40.13216800012742,
+        "p95": 43.0026470003213,
+        "p99": 43.0026470003213,
+        "mean": -25.236018333089305,
+        "n": 3
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4969.46875,
+      "gpu_util_pct_peak": 40.0,
+      "gpu_mem_mb_peak": 17076.625
+    },
+    {
+      "concurrency": 2,
+      "latency_ms": {
+        "p50": 30.21832200101926,
+        "p95": 50.723362001008354,
+        "p99": 50.723362001008354,
+        "mean": 11.360413124748447,
+        "n": 8
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5045.1015625,
+      "gpu_util_pct_peak": 64.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 3,
+      "latency_ms": {
+        "p50": 29.62860399929923,
+        "p95": 71.45144900096057,
+        "p99": 71.45144900096057,
+        "mean": 18.422125615520947,
+        "n": 13
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5061.4375,
+      "gpu_util_pct_peak": 65.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 4,
+      "latency_ms": {
+        "p50": 31.897801000013715,
+        "p95": 108.46968199984985,
+        "p99": 108.46968199984985,
+        "mean": 30.42552488851571,
+        "n": 18
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5076.6875,
+      "gpu_util_pct_peak": 63.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 5,
+      "latency_ms": {
+        "p50": 38.507208999362774,
+        "p95": 74.34127000124136,
+        "p99": 89.99488599874894,
+        "mean": 30.47416730434001,
+        "n": 23
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5092.55078125,
+      "gpu_util_pct_peak": 81.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 6,
+      "latency_ms": {
+        "p50": 40.936329000032856,
+        "p95": 109.66285500035156,
+        "p99": 128.04428900017228,
+        "mean": 31.720899259299685,
+        "n": 27
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5104.35546875,
+      "gpu_util_pct_peak": 94.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 7,
+      "latency_ms": {
+        "p50": 36.21133600063331,
+        "p95": 114.63588900005561,
+        "p99": 142.3812299999554,
+        "mean": 28.706783100157434,
+        "n": 30
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5115.06640625,
+      "gpu_util_pct_peak": 85.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 8,
+      "latency_ms": {
+        "p50": 33.30856699903961,
+        "p95": 142.2480330002145,
+        "p99": 172.48700400159578,
+        "mean": 12.828653485641032,
+        "n": 35
+      },
+      "client_errors": 8,
+      "dropped_chunks": 0.0,
+      "rejections": 8.0,
+      "server_errors": 0.0,
+      "passed": false,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5127.26953125,
+      "gpu_util_pct_peak": 82.0,
+      "gpu_mem_mb_peak": 17084.625
+    }
+  ],
+  "max_passing_concurrency": 7,
+  "meta": {
+    "git_sha": "1bb0acd203d86237467c99e7be06183b295323e1",
+    "platform": "Linux-6.8.0-111-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]"
+  }
+}
