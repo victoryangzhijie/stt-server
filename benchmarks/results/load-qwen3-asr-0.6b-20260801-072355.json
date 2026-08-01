@@ -1,0 +1,287 @@
+{
+  "model": "qwen3-asr-0.6b",
+  "config": "configs/qwen3asr.yaml",
+  "utterance_seconds": 15.0,
+  "start": 1,
+  "step": 1,
+  "max": 16,
+  "slo_final_ms": 2000.0,
+  "slo_pct": 95,
+  "window_seconds": 30.0,
+  "seed": 42,
+  "synthetic": false,
+  "rungs": [
+    {
+      "concurrency": 1,
+      "latency_ms": {
+        "p50": 42.330076001235284,
+        "p95": 42.44438600289868,
+        "p99": 42.44438600289868,
+        "mean": -25.324128665185224,
+        "n": 3
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4783.97265625,
+      "gpu_util_pct_peak": 46.0,
+      "gpu_mem_mb_peak": 17076.625
+    },
+    {
+      "concurrency": 2,
+      "latency_ms": {
+        "p50": 28.947496000910178,
+        "p95": 51.74617699958617,
+        "p99": 51.74617699958617,
+        "mean": 13.944807624284294,
+        "n": 8
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4860.1875,
+      "gpu_util_pct_peak": 40.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 3,
+      "latency_ms": {
+        "p50": 30.083071000262862,
+        "p95": 51.039025998761645,
+        "p99": 51.039025998761645,
+        "mean": 17.938790692054543,
+        "n": 13
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4878.4375,
+      "gpu_util_pct_peak": 65.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 4,
+      "latency_ms": {
+        "p50": 30.089915002463385,
+        "p95": 116.97945000196341,
+        "p99": 116.97945000196341,
+        "mean": 31.5830491114563,
+        "n": 18
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4898.2734375,
+      "gpu_util_pct_peak": 93.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 5,
+      "latency_ms": {
+        "p50": 34.223521000967594,
+        "p95": 82.4578259998816,
+        "p99": 114.14325199802988,
+        "mean": 36.339572173386365,
+        "n": 23
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4911.90234375,
+      "gpu_util_pct_peak": 84.0,
+      "gpu_mem_mb_peak": 17084.625
+    },
+    {
+      "concurrency": 6,
+      "latency_ms": {
+        "p50": 44.31455899975845,
+        "p95": 107.42460400069831,
+        "p99": 133.42083499810542,
+        "mean": 49.32321836652894,
+        "n": 30
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4928.18359375,
+      "gpu_util_pct_peak": 87.0,
+      "gpu_mem_mb_peak": 17086.625
+    },
+    {
+      "concurrency": 7,
+      "latency_ms": {
+        "p50": 36.992571000155294,
+        "p95": 145.94648999991477,
+        "p99": 175.81773799975053,
+        "mean": 48.51080489203702,
+        "n": 37
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4947.00390625,
+      "gpu_util_pct_peak": 87.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 8,
+      "latency_ms": {
+        "p50": 40.35685100097908,
+        "p95": 150.7625639969774,
+        "p99": 217.1749910012295,
+        "mean": 58.538644604447846,
+        "n": 43
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4962.6640625,
+      "gpu_util_pct_peak": 86.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 9,
+      "latency_ms": {
+        "p50": 52.26927699914086,
+        "p95": 165.88130200034357,
+        "p99": 324.30725199810695,
+        "mean": 71.81892806238466,
+        "n": 48
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4981.015625,
+      "gpu_util_pct_peak": 92.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 10,
+      "latency_ms": {
+        "p50": 69.82312099717092,
+        "p95": 222.00429899748997,
+        "p99": 260.17544100250234,
+        "mean": 92.99867005742831,
+        "n": 52
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 4994.3125,
+      "gpu_util_pct_peak": 92.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 11,
+      "latency_ms": {
+        "p50": 122.03179900097894,
+        "p95": 287.20976899785455,
+        "p99": 335.1166979991831,
+        "mean": 126.71343905471572,
+        "n": 55
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5014.55859375,
+      "gpu_util_pct_peak": 93.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 12,
+      "latency_ms": {
+        "p50": 533.5537520004436,
+        "p95": 987.5118700001622,
+        "p99": 1564.2631650007388,
+        "mean": 518.3666248703958,
+        "n": 54
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5026.9453125,
+      "gpu_util_pct_peak": 93.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 13,
+      "latency_ms": {
+        "p50": 982.369686000311,
+        "p95": 1979.8959369982185,
+        "p99": 3889.6967979999317,
+        "mean": 1000.8428886664178,
+        "n": 51
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": true,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5027.203125,
+      "gpu_util_pct_peak": 91.0,
+      "gpu_mem_mb_peak": 17090.625
+    },
+    {
+      "concurrency": 14,
+      "latency_ms": {
+        "p50": 1314.4939099984185,
+        "p95": 3713.8802749977913,
+        "p99": 6846.27645799992,
+        "mean": 1522.0445680557464,
+        "n": 54
+      },
+      "client_errors": 0,
+      "dropped_chunks": 0.0,
+      "rejections": 0.0,
+      "server_errors": 0.0,
+      "passed": false,
+      "cpu_pct_peak": 0.0,
+      "rss_mb_peak": 5018.765625,
+      "gpu_util_pct_peak": 90.0,
+      "gpu_mem_mb_peak": 17092.625
+    }
+  ],
+  "max_passing_concurrency": 13,
+  "meta": {
+    "git_sha": "b2024a90c26d8b0d18fb9b1e062fd721aedd79be",
+    "platform": "Linux-6.8.0-111-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]"
+  }
+}
