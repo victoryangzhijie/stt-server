@@ -92,3 +92,51 @@ def test_named_prewarm_invocation_exits_nonzero_with_actionable_message(
     assert "funasr is not installed" in err
     assert "stt-server[funasr]" in err
     assert not funasr_artifact.dest.exists()
+
+
+def test_nemotron_registry_entry_is_a_prewarm():
+    mod = _load_script_module()
+    artifact = mod.REGISTRY["nemotron-3.5-asr-streaming-0.6b"]
+    assert artifact.prewarm is not None
+    # The prewarm writes the real .nemo here, so `dest` doubles as the
+    # idempotency marker (see the artifact's comment in the script).
+    assert artifact.dest.name == "nemotron-3.5-asr-streaming-0.6b.nemo"
+    assert artifact.dest.parent.name == "nemotron-3.5-asr-streaming-0.6b"
+
+
+def test_nemotron_prewarm_turns_missing_huggingface_hub_into_runtimeerror(monkeypatch):
+    mod = _load_script_module()
+
+    # Force the deferred `from huggingface_hub import hf_hub_download` to
+    # raise ImportError regardless of whether the package is installed in
+    # this environment: a None entry in sys.modules makes the import
+    # machinery raise instead of finding/loading the real module.
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        mod.REGISTRY["nemotron-3.5-asr-streaming-0.6b"].prewarm()
+
+    message = str(excinfo.value)
+    assert "huggingface_hub is not installed" in message
+    assert "stt-server[nemotron]" in message
+
+
+def test_named_nemotron_prewarm_invocation_exits_nonzero_without_huggingface_hub(
+    tmp_path, capsys, monkeypatch
+):
+    mod = _load_script_module()
+
+    artifact = dataclasses.replace(
+        mod.REGISTRY["nemotron-3.5-asr-streaming-0.6b"],
+        dest=tmp_path / "nemotron.nemo",
+    )
+    monkeypatch.setattr(mod, "REGISTRY", {"nemotron-3.5-asr-streaming-0.6b": artifact})
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+
+    rc = mod.main(["nemotron-3.5-asr-streaming-0.6b"])
+
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "[error] nemotron-3.5-asr-streaming-0.6b:" in err
+    assert "huggingface_hub is not installed" in err
+    assert not artifact.dest.exists(), "failed prewarm must not leave a marker"

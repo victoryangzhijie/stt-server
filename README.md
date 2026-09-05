@@ -3,8 +3,8 @@
 A research-oriented, production-minded real-time speech-to-text serving
 system: an OpenAI-compatible WebSocket/HTTP surface in front of a
 protocol-agnostic core (VAD → endpointing → per-backend streaming decode →
-transcript stabilization), with four pluggable open-source ASR backends
-(mock, sherpa-onnx, FunASR, Qwen3-ASR), each running under its own execution
+transcript stabilization), with five pluggable open-source ASR backends
+(mock, sherpa-onnx, FunASR, Qwen3-ASR, Nemotron), each running under its own execution
 strategy rather than one forced concurrency model. Compatibility claims are
 scoped to what's tested — see `docs/openai-compat.md`'s event matrix — and
 the benchmark harness under `benchmarks/` is built to make every reported
@@ -25,6 +25,7 @@ and the **Project status** section below for what's implemented vs. pending.
 | sherpa-onnx | `sherpa_onnx` | `sherpa` | dedicated `ThreadPoolExecutor` | real model, macOS CPU, real transcript ("CANOE SLID") |
 | FunASR | `funasr` | `funasr` | bounded `ThreadPoolExecutor` | real model, macOS CPU, real Mandarin transcript (manual) |
 | Qwen3-ASR | `qwen3asr` | `qwen3asr` | bounded `ThreadPoolExecutor` (vLLM's sync `LLM`, not an async engine) | real model, NVIDIA A10 (Docker `gpu` profile); see `GPU_VERIFICATION_REPORT.md` |
+| Nemotron 3.5 ASR Streaming 0.6B | `nemotron` | `nemotron` | bounded `ThreadPoolExecutor` + a process-wide model-step lock | **NOT RUN** — see `docs/nemotron_a10_runbook.md` |
 
 See [`docs/backends.md`](docs/backends.md) for the plugin contract, how to
 write a backend, the conformance test suite, execution-strategy rationale,
@@ -141,13 +142,16 @@ block it at the proxy, or keep the whole service on a private network).
 
 **Implemented and tested:**
 
-- Four backends behind one plugin contract, each with its own execution
+- Five backends behind one plugin contract, each with its own execution
   strategy (§3.1 of `docs/architecture.md`) — mock (continuous, the default
   for the whole test suite), sherpa-onnx and FunASR (real models, verified
   on macOS CPU with real transcripts — see the Backends table above),
   Qwen3-ASR (real model verified end-to-end on an NVIDIA A10 through the
   Docker `gpu` profile — transcript, latency, VRAM, and concurrency
-  characterized in `GPU_VERIFICATION_REPORT.md`).
+  characterized in `GPU_VERIFICATION_REPORT.md`), and Nemotron 3.5 ASR
+  Streaming 0.6B (one streaming model serving Chinese and English with
+  automatic per-utterance language ID — written but **never run on real
+  hardware**; `docs/nemotron_a10_runbook.md` is the bring-up procedure).
 - Three protocol adapters (native WS, OpenAI Realtime-style WS, OpenAI
   file-style HTTP) sharing one protocol-agnostic core; auth (constant-time
   bearer tokens), session/upload/duration limits, and a pre-parse upload-size

@@ -14,6 +14,7 @@
 #   SKIP_ACCURACY=1    skip phase 5 (accuracy run vs qwen3asr)
 #   SKIP_LOAD=1        skip phase 6 (load run vs qwen3asr)
 #   SKIP_FUNASR_CHECK=1 skip phase 7 (funasr zero-length is_final=True check)
+#   SKIP_NEMOTRON=1    skip phase 8 (nemotron model tests + load run)
 #
 # Run from the repo root: `bash scripts/run_gpu_suite.sh`
 
@@ -158,6 +159,32 @@ asyncio.run(main())
 PYEOF
 else
     phase 7 "SKIPPED (SKIP_FUNASR_CHECK=1)"
+fi
+
+if [[ "${SKIP_NEMOTRON:-0}" != "1" ]]; then
+    phase 8 "nemotron: model+gpu tests, then a load run vs configs/nemotron.yaml"
+    # This backend has NEVER run on real hardware (docs/backends.md#nemotron
+    # says so plainly). docs/nemotron_a10_runbook.md is the full bring-up
+    # procedure -- system deps (libsndfile1/ffmpeg), the extras install that
+    # must not touch uv.lock, the .nemo/silero downloads, the
+    # scripts/validate_nemotron_a10.py zh+en validation run, and the
+    # UNVERIFIED checklist to fill in. This phase is only the automatable
+    # slice of it, and skips cleanly when the extra isn't installed.
+    if ! uv run python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('nemo') else 1)"; then
+        echo "[skip] nemotron extra not installed (uv pip install --python .venv/bin/python -e '.[nemotron]');"
+        echo "       see docs/nemotron_a10_runbook.md"
+    else
+        uv run pytest -m "model and gpu" tests/backends/test_nemotron_backend_model.py
+
+        # Same methodology rule as phase 5/6: no --pace override, real time.
+        uv run python -m benchmarks.run_load \
+            --config configs/nemotron.yaml --model nemotron-3.5-asr-streaming-0.6b \
+            --utterance-seconds 5 --start 1 --step 1 --max 8 \
+            --window-seconds 30 --slo-final-ms 2000 --slo-pct 95 --seed 42 \
+            --synthetic
+    fi
+else
+    phase 8 "SKIPPED (SKIP_NEMOTRON=1)"
 fi
 
 echo

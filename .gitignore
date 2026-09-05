@@ -50,6 +50,9 @@ benchmarks/data/*
 !benchmarks/data/README.md
 !benchmarks/data/validate.py
 benchmarks/results/
+# Locally generated TTS clips (scripts/make_tts_fixtures.sh). macOS `say`
+# voice output has unclear redistribution licensing, so these stay local.
+benchmarks/audio/
 
 # Logs
 *.log

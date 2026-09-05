@@ -3,6 +3,13 @@
 # Uses the CUDA *runtime* (not devel) base image; Python 3.12 is provisioned
 # by uv itself (`uv python install`) rather than relying on the distro's
 # python3, since Ubuntu 22.04 ships 3.10 by default.
+#
+# This image does NOT include the `nemotron` extra. That backend has never
+# run on real hardware, and bringing it up needs system packages this image
+# does not install (`libsndfile1`, `ffmpeg`) plus a ~2.4 GB `.nemo`
+# download. Run it from a venv on the box first, per
+# docs/nemotron_a10_runbook.md; fold it into an image only once the
+# runbook's UNVERIFIED checklist has answers.
 
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
 

@@ -2,8 +2,9 @@
 
 This document is the plugin contract every STT backend implements, a
 walkthrough of how to write a new one, the conformance test suite every
-backend must pass, and per-backend setup/verification notes for the four
-backends shipped in this repo (`mock`, `sherpa_onnx`, `funasr`, `qwen3asr`).
+backend must pass, and per-backend setup/verification notes for the five
+backends shipped in this repo (`mock`, `sherpa_onnx`, `funasr`, `qwen3asr`,
+`nemotron`).
 
 Like `docs/openai-compat.md`, this is the *tested* surface, not the
 aspirational one: every file, class, and command named below was
@@ -102,13 +103,14 @@ raising `BackendUnavailableError` for an unknown type, and otherwise
 constructs `cls(**defn.options)`, wrapping a `TypeError` (bad/missing
 kwargs) in the same error type. `src/stt_server/backends/__init__.py` is
 what actually triggers registration — it imports `mock`, `sherpa`,
-`funasr`, `qwen3asr` purely for their side effect (the `@register_backend`
-decorator running at import time):
+`funasr`, `qwen3asr`, `nemotron` purely for their side effect (the
+`@register_backend` decorator running at import time):
 
 ```python
 from stt_server.backends import (
     funasr,  # noqa: F401  (registers the funasr backend)
     mock,  # noqa: F401  (registers the mock backend)
+    nemotron,  # noqa: F401  (registers the nemotron backend)
     qwen3asr,  # noqa: F401  (registers the qwen3asr backend)
     sherpa,  # noqa: F401  (registers the sherpa_onnx backend)
 )
@@ -124,7 +126,8 @@ Every real backend's module docstring states the same invariant: importing
 the backend module (and therefore `stt_server.backends` as a whole, since
 `__init__.py` imports every backend) must never require the optional
 extra to be installed. The pattern, consistent across
-`sherpa/backend.py`, `funasr/backend.py`, and `qwen3asr/backend.py`:
+`sherpa/backend.py`, `funasr/backend.py`, `qwen3asr/backend.py`, and
+`nemotron/backend.py`:
 
 1. At module level, import only stdlib/always-available things
    (`asyncio`, `importlib.util`, `concurrent.futures.ThreadPoolExecutor`,
@@ -137,9 +140,10 @@ extra to be installed. The pattern, consistent across
 3. The real `from <pkg> import ...` only happens inside a method that's
    actually called after the availability check has passed — e.g.
    `SherpaBackend._build_recognizer`, `FunasrBackend._build_model`,
-   `Qwen3AsrBackend._build_model` — so the heavy dependency (onnxruntime,
-   torch/torchaudio, vllm) is never imported unless that specific backend
-   is actually configured and started.
+   `Qwen3AsrBackend._build_model`, `NemotronBackend._build_model` — so the
+   heavy dependency (onnxruntime, torch/torchaudio, vllm, nemo_toolkit) is
+   never imported unless that specific backend is actually configured and
+   started.
 
 This is what lets the server "always boot with the mock backend" (spec
 §6) even when none of the optional extras are installed, and it's what
@@ -201,6 +205,7 @@ owns its own concurrency model rather than the core imposing one:
 | sherpa-onnx | dedicated `ThreadPoolExecutor` | onnxruntime releases the GIL during inference, so a thread pool gets real parallelism; native calls are synchronous |
 | FunASR | bounded `ThreadPoolExecutor` | `model.generate(...)` is a synchronous, blocking torch call |
 | Qwen3-ASR | bounded `ThreadPoolExecutor` (not an async engine) | verified against the real framework source: `Qwen3ASRModel.LLM(...)` wraps vLLM's **synchronous, blocking** `LLM` class, not `AsyncLLMEngine` — see the module docstring in `qwen3asr/backend.py` for the full research trail. The original plan's assumption that vLLM's async engine could be awaited in-loop with an `asyncio.Semaphore` turned out to be wrong; the adapter uses the executor pattern instead, with `max_concurrent` sized as `pool_workers` in the other two backends |
+| Nemotron | bounded `ThreadPoolExecutor` **plus a process-wide step lock** | the NeMo cache-aware step is a synchronous blocking torch call, so it goes on an executor sized by `max_concurrent` like the others — but the language prompt is set *model-globally* (`set_inference_prompt`) and CUDA model calls are not thread-safe, so a cross-stream `threading.Lock` wraps prompt-set + step together. Per-stream state (encoder cache, decoder hypotheses) is still fully isolated; the shared lock bounds throughput, not correctness, which is why the real concurrency ceiling is an open question (see `docs/nemotron_a10_runbook.md`) |
 
 Rule of thumb for a new backend: if the underlying inference call is a
 synchronous/blocking Python call (true of essentially every ONNX/torch/CTranslate2-style
@@ -426,6 +431,231 @@ Every profile below lives at `configs/<name>.yaml` and is runnable as
   — is explicitly deferred to Plan 4. Do not read "written" as "verified"
   for this backend.
 
+### nemotron (`configs/nemotron.yaml`)
+
+- **Extras:** `pip install 'stt-server[nemotron]'`
+  (`nemo_toolkit[asr]>=3.0.0`, which pulls torch/torchaudio/lightning
+  transitively). Requires a CUDA GPU in practice. The model card also asks
+  for the system packages `libsndfile1 ffmpeg` and, before installing,
+  `pip install Cython packaging` — see
+  [`docs/nemotron_a10_runbook.md`](nemotron_a10_runbook.md) §1-2.
+- **Model download:** optional.
+  `nvidia/nemotron-3.5-asr-streaming-0.6b` is pulled by NeMo's own
+  `from_pretrained()` the first time `NemotronBackend.start()` builds the
+  model. To fetch the 2.37 GB `.nemo` file ahead of time instead:
+  `uv run python scripts/download_models.py nemotron-3.5-asr-streaming-0.6b`
+  (a `prewarm` entry that goes through `huggingface_hub`, so `HF_ENDPOINT`
+  mirrors work), landing at
+  `models/nemotron-3.5-asr-streaming-0.6b/nemotron-3.5-asr-streaming-0.6b.nemo`;
+  then set `options.model` to that path.
+- **Config:** `type: nemotron`, `options.model:
+  nvidia/nemotron-3.5-asr-streaming-0.6b`, `att_context_size: [56, 6]`,
+  `language: null`, `strip_lang_tags: true`, `device: cuda`, `amp: false`,
+  `max_concurrent: 8`, `warmup: true`. `att_context_size` is `[left, right]`
+  in encoder *output* frames; the encoder subsamples 8x, so one output frame
+  is 80 ms and the streaming chunk is `(right + 1) * 80 ms` — `right=6` is
+  the 560 ms chunk the model card recommends. The constructor accepts
+  only the four right-context values the checkpoint was trained with —
+  0/3/6/13 → 80/320/560/1120 ms (`model_config.yaml:602-611`; NeMo's
+  `set_default_att_context_size` merely *warns* for anything else, so
+  e.g. `[56, 1]` would load and decode out of distribution). Uses the
+  `silero` VAD profile, same rationale as sherpa and qwen3asr.
+- **Capabilities:** `streaming=True, languages=("en", "zh", ...)` — "en" and
+  "zh" first because serving both from one model is this backend's reason to
+  exist; the underlying model advertises 40 locales across three quality
+  tiers, so the tuple is representative, not an exhaustive limit.
+  `native_endpointing=False` (the server's VAD/endpointer decides utterance
+  boundaries), `batch_decode=False`.
+- **Execution strategy:** bounded `ThreadPoolExecutor` sized by
+  `max_concurrent`, **plus** a process-wide `threading.Lock` held across
+  `set_inference_prompt(<this stream's locale>)` and the model step. The
+  prompt is model-global state and CUDA model calls are not thread-safe, so
+  those two operations cannot interleave across streams. Everything else is
+  per-stream: each `NemotronStream` owns its own encoder cache
+  (`cache_last_channel`, `cache_last_time`, `cache_last_channel_len`) and
+  decoder state, so sessions never contaminate each other. See §2.5.
+- **Verified on: NOT RUN.** This backend has never executed against a real
+  model on real hardware — no CUDA GPU in this development environment. The
+  implementation and its tests were written against the model card and the
+  NeMo API surface, not against a running model. Do not read "written" as
+  "verified": the class name in the installed wheel, the HF-id
+  `from_pretrained` path, fp32-vs-AMP behavior, the real per-step latency at
+  560 ms, the concurrency ceiling, and the measured zh CER are all still
+  open. [`docs/nemotron_a10_runbook.md`](nemotron_a10_runbook.md) is the
+  procedure that closes this gap, and its §10 is the full UNVERIFIED
+  checklist.
+- **Language handling (zh + en, and 38 more).** This is the only backend
+  here that serves Chinese and English from one streaming model:
+  - `language: null` (the shipped default) means **automatic per-utterance
+    language identification**, so one server handles mixed zh + en traffic
+    and reports the detected locale on the FINAL event.
+  - Explicit selection accepts a full locale (`zh-CN`, `en-US`), a bare ISO
+    639-1 code (`zh`, `en`), or an English language name (`chinese`,
+    `english`), normalized to the model's locale vocabulary. An
+    unrecognized value is ignored with a `logger.debug`, never an error —
+    OpenAI treats `language` as a hint (see §5).
+  - `StreamConfig.language` overrides the configured default for that one
+    stream, so the file endpoint's `language` form field really does switch
+    languages per request.
+  - The model emits a `<xx-XX>` locale tag in its output text.
+    `strip_lang_tags: true` removes those tags from the transcript while
+    still extracting the last one as the detected locale.
+  - **Accuracy is not uniform across languages.** NVIDIA places en-US in
+    the "transcription-ready" tier and zh-CN in "broad-coverage" (FLEURS
+    CER ~19-20%). For Mandarin-only accuracy, the FunASR paraformer backend
+    remains the better choice; nemotron's value is one streaming model, one
+    GPU, zh + en (+38) with auto language ID.
+
+- **Unverified paths.** Beyond the "NOT RUN" note above, these are
+  specifically untested code paths rather than unmeasured numbers:
+  `device: cpu` and `device: mps` (accepted by the constructor, never run,
+  and expected to be far below real time on CPU); `amp: true` (the
+  `torch.autocast` bf16 encoder path, off by default because cache-aware
+  NeMo models are documented as float32-only); `att_context_size` values
+  other than `[56, 6]`; and loading from a local `.nemo` path via
+  `restore_from` rather than the HF id.
+
+#### Streaming internals
+
+Implementation: `src/stt_server/backends/nemotron/backend.py`. Its module
+docstring is the long form — every NeMo claim there cites a wheel path in
+`nemo_toolkit==3.0.0`. This is the summary.
+
+**The entry point is `model.conformer_stream_step`, and it takes features,
+not audio.** Its first parameter is `processed_signal: Tensor` of shape
+`(B, 128, n_frames)`; there is no raw-waveform parameter anywhere in the
+cache-aware path (`nemo/collections/asr/parts/mixins/mixins.py:602-615`).
+The backend therefore runs the mel preprocessor itself, on a private clone
+of the model's own preprocessor config with `dither=0.0` and `pad_to=0`
+(NeMo's own recipe, `parts/utils/streaming_utils.py:1716-1726`). NVIDIA's
+live reference (`nemo/agents/voice_agent/pipecat/services/nemo/streaming_asr.py:256`)
+calls `encoder.cache_aware_stream_step` directly instead — that path skips
+`_apply_prompt_to_encoded` (`mixins.py:674`) and therefore the language
+prompt entirely, so it is deliberately *not* copied here.
+
+**Step arithmetic** (all read from `encoder.streaming_cfg` at load time by
+`_read_geometry`, never hardcoded from the model card). With
+`att_context_size = [56, R]`, `subsampling_factor = 8`,
+`sampling_frames = [1, 8]` and `pre_encode_cache_size = [0, 9]`:
+
+| quantity | value | at `R = 6` |
+|---|---|---|
+| new audio per step (`chunk_size[1]`) | `8 + 8R` frames × 160 samples | 8960 samples = 560 ms |
+| left feature context prepended | `pre_encode_cache_size[1]` = 9 frames | 90 ms |
+| `processed_signal` width | `17 + 8R` frames | 65 |
+| `drop_extra_pre_encoded` | `1 + (9-1)//8` = 2 | 2 |
+| encoder frames out (`valid_out_len`) | `R + 1` × 80 ms | 7 = 560 ms |
+
+`chunk_samples_for([56, R])` is the pure function for the first row (8960 at
+`R=6`, 5120 at `R=3`). The 9 frames of left context are prepended on
+*every* step — zeros on the first — with a constant
+`drop_extra_pre_encoded = 2`, i.e. NeMo's `pad_and_drop_preencoded=True`
+scheme (`streaming_utils.py:1603-1604, 1644-1652`), so every step is
+geometrically identical: `ceil((17+8R)/8) - 2 = R + 1` output frames.
+
+**Byte-stride buffering.** `push_audio` appends raw PCM16 bytes to a
+`bytearray` and, while at least `chunk_frames × 160 × 2` bytes are
+available, pops exactly one chunk and runs one step on the shared
+`ThreadPoolExecutor` (the same pattern as `FunasrStream`). A push smaller
+than one chunk does no model work at all.
+
+**Raw-audio look-back.** The mel STFT runs with `center=True`
+(`parts/preprocessing/features.py:378-384`), so chunk-wise feature
+extraction is only exact if at least `n_fft // 2 = 256` samples of the
+previous audio are prepended and the leading frames dropped. The backend
+prepends `LOOKBACK_SAMPLES = 320` (2 whole frames, the smallest frame
+multiple ≥ 256) and then slices: first a head-slice to the frame count NeMo
+*reports* (`length // 160`, `features.py:405-408`) because `center=True`
+returns one extra column that NeMo zeroes rather than removes
+(`features.py:481-485`), then a tail-slice to the new chunk's frames.
+NVIDIA's live service uses one 160-sample frame of look-back
+(`services/nemo/utils.py:100`), which is below 256 and slightly approximate
+at the seam; 320 is strictly better and costs nothing.
+
+**Per-stream state, one shared lock.** Each `NemotronStream` owns its
+encoder caches — `cache_last_channel` `(24, 1, 56, 1024)`, `cache_last_time`
+`(24, 1, 1024, 8)`, `cache_last_channel_len` `(1,)`, all float32 — from
+`encoder.get_initial_cache_state(batch_size=1)`, plus its own
+`previous_hypotheses`, raw look-back and left feature context. Those caches
+are allocated **lazily on the first step, on the executor**, so
+`create_stream` never touches CUDA from the event loop. `previous_pred_out`
+is a CTC-only parameter (`mixins.py:702-707`) and is always `None`.
+Around `set_inference_prompt(<this stream's locale>)` **and** the step, a
+process-wide `threading.Lock` is held. It is mandatory for two independent
+reasons: the prompt is a single model-global int
+(`_inference_prompt_index`, `mixins.py:949-969`), and
+`cache_aware_stream_step` mutates the shared
+`encoder.streaming_cfg.drop_extra_pre_encoded` for the duration of the call
+and restores it afterwards (`parts/mixins/streaming.py:53-74`). It is a
+`threading.Lock`, not an asyncio one, so exclusion survives cancellation of
+an in-flight decode. Consequence: all model compute is serialized;
+`max_concurrent` buys concurrency in feature extraction and queueing, not in
+the step. The prompt is never left unset — `_apply_prompt_to_encoded`
+silently returns the encoder output unmodified when the attribute is absent
+(`mixins.py:978-979`), which would be an unconditioned decode with no error.
+
+**Partials.** For this RNNT model the step's slot-5 return is a
+`list[Hypothesis]` and `hyp.text` is **cumulative**, because partial
+hypotheses are merged in place (`parts/submodules/rnnt_greedy_decoding.py:828-834`).
+So each partial is the whole hypothesis so far — REPLACE semantics for the
+stabilizer, like sherpa and qwen3asr — deduped on unchanged text, since a
+step over silence legitimately leaves the text identical and a duplicate
+would inflate the stabilizer's confirmation count.
+
+**Locale tags.** NeMo's `strip_lang_tags` defaults to `False`
+(`parts/submodules/rnnt_decoding.py:1900-1902`) and the checkpoint does not
+set it, so `hyp.text` arrives with `<xx-XX>` tags — real vocabulary tokens.
+The backend keeps NeMo's stripping off *on purpose* and calls
+`split_lang_tag()` itself: the last tag is the model's current language-ID
+decision (reported as `BackendEvent.language` on the FINAL, via
+`locale_to_language_name`), and all tags are removed from the emitted text
+when `strip_lang_tags: true`. With an explicitly pinned language the
+requested language is reported instead.
+
+**`finalize()` flush.** `_done` is flipped first (that flag, not the lock
+scope, makes a concurrent `push_audio` a no-op), then under the per-stream
+lock the sub-chunk remainder is zero-padded to a full chunk, run through the
+preprocessor, and the resulting features are truncated back to the frames
+really covered by audio (at least `sampling_frames[1] = 8`, mirroring
+`streaming_utils.py:1637-1638`) so `processed_signal_length` stays truthful.
+That last step passes `keep_all_outputs=True`, which skips the
+`valid_out_len` truncation in `streaming_post_process`
+(`modules/conformer_encoder.py:567-569`) and so preserves the tail. Two
+shortcuts, both deliberate: an empty remainder after at least one step
+returns the hypothesis as it stands (nothing left to decode), and an
+utterance where no audio ever arrived emits a FINAL with `""` **without
+touching the model** — exactly one FINAL either way, per the plugin
+contract, but no GPU work for an empty utterance.
+
+**Warm-up.** `warmup: true` pushes ~1.2 s of silence through the same step
+code path, final flush included, inside `start()` (off-loop via
+`asyncio.to_thread`), so the first client request does not pay CUDA graph
+capture / kernel autotune. Best effort: a failure is logged and swallowed.
+`stop()` shuts the executor down off-loop, drops the model, and makes a
+guarded best-effort `torch.cuda.empty_cache()`.
+
+**Decoding config.** `strategy: greedy_batch` with `loop_labels` left at its
+default `True` — that is the only greedy path supporting
+`partial_hypotheses` (`rnnt_greedy_decoding.py:828-834`; the frames path
+raises at `:844-845`). `fused_batch_size: -1` disables the joint's
+training-time fused loss/WER (`rnnt_decoding.py:277, 1029-1033`), matching
+NVIDIA's live service. `compute_timestamps` and `preserve_alignments` stay
+`False`: this backend reads `hyp.text`, and alignments grow unboundedly over
+a long utterance.
+
+**Still unverified after all of the above** (nothing here has run on real
+hardware): that the published wheel behaves as its source reads; the
+numeric equivalence of chunk-wise vs whole-utterance features (the 320-sample
+argument is sound for the STFT, but the mel+log path was never diffed);
+`greedy.use_cuda_graph_decoder` (default `True`) interacting with per-stream
+`partial_hypotheses` under the shared lock — turn it off first if concurrent
+streams contaminate each other; per-step latency and the real concurrency
+ceiling under the global lock; the warm-up cost; and whether the `<xx-XX>`
+tag actually appears in streaming output at all, which is what the whole
+detected-language path depends on. See
+[`docs/nemotron_a10_runbook.md`](nemotron_a10_runbook.md) §10.
+
+
 ## 5. Known limitations
 
 - **`StreamConfig.language` per-request behavior (Plan 4 Task 2).**
@@ -436,6 +666,14 @@ Every profile below lives at `configs/<name>.yaml` and is runnable as
     is passed straight through — a client-supplied `language` on the file
     endpoint (or a future protocol surface) really does override the
     backend's configured default for that one stream.
+  - `NemotronBackend`: honors it too, and is the only backend where this
+    genuinely switches languages rather than picking among a model's
+    fixed capabilities — `cfg.language` (normalized to the model's locale
+    vocabulary, e.g. `zh` → `zh-CN`, `english` → `en-US`) selects the
+    language-prompt vector for that one utterance, overriding the
+    configured default. `None`/`"auto"` leaves the model in automatic
+    language-identification mode. An unrecognized code falls back to
+    `auto` with a `logger.debug`, never an error.
   - `SherpaBackend` / `FunasrBackend`: both wrap a single loaded model
     that is fixed to whatever language it was built/trained for — there is
     no per-utterance language knob in the underlying engine. If
