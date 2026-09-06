@@ -184,7 +184,30 @@ check in `docs/backends.md#funasr`):
 scp benchmarks/audio/*.wav <a10-box>:~/stt-server/benchmarks/audio/
 ```
 
-On Linux, produce equivalents any way you like and convert:
+On Linux, produce equivalents with **edge-tts** (natural neural voices; the
+A10 bring-up measured that the model decodes these perfectly at CER/WER
+0.00%):
+
+```bash
+uv pip install --python .venv/bin/python edge-tts
+python - <<'PY'  # .venv/bin/python
+import asyncio, edge_tts
+async def gen(text, voice, out):
+    await edge_tts.Communicate(text, voice).save(out)
+ZH = "今天天气很好，我们打算下午去公园散步，顺便买一杯热咖啡。"
+EN = "The canoe slid on the smooth planks, and the boy carried a heavy box of tools across the yard."
+asyncio.run(gen(ZH, "zh-CN-XiaoxiaoNeural", "benchmarks/audio/zh_sample.mp3"))
+asyncio.run(gen(EN, "en-US-AriaNeural", "benchmarks/audio/en_sample.mp3"))
+PY
+ffmpeg -y -loglevel error -i benchmarks/audio/zh_sample.mp3 -ar 16000 -ac 1 -c:a pcm_s16le benchmarks/audio/zh_sample.wav
+ffmpeg -y -loglevel error -i benchmarks/audio/en_sample.mp3 -ar 16000 -ac 1 -c:a pcm_s16le benchmarks/audio/en_sample.wav
+```
+
+**Do not use espeak-ng for the zh clip**: measured on the A10, its Mandarin
+synthesis decodes to an *empty* transcript in every language mode (auto,
+zh-CN, en-US) — the model cannot understand its pinyin-approximation
+output. Its English is recognizable but degraded, which would corrupt the
+CER/WER smoke numbers. Convert any output with:
 `ffmpeg -i in.any -ar 16000 -ac 1 -c:a pcm_s16le out.wav`.
 
 ## 7. Validation run
@@ -273,53 +296,70 @@ commit message):
 | en-US WER on test-clean | `run_accuracy` result JSON |
 | Concurrency ceiling (last rung meeting the SLO with 0 drops) | `run_load` |
 
-## 10. UNVERIFIED checklist
+## 10. UNVERIFIED checklist — ANSWERED (A10, 2026-09-06)
 
-Nothing about this backend has run on real hardware. Each item below is an
-assumption made while writing it; confirm or refute each one and record the
-answer.
+Each item below was answered on the A10; full numbers and method in
+`NEMOTRON_A10_VERIFICATION_REPORT.md` (same repo root).
 
-- [ ] **`nemo_toolkit>=3.0.0` from PyPI contains `EncDecRNNTBPEModelWithPrompt`**
-      at `nemo.collections.asr.models.rnnt_bpe_models_prompt`. The whole
-      backend depends on this class existing in the published wheel, not
-      only in the GitHub main branch. (§2 snippet.)
-- [ ] **`ASRModel.from_pretrained(model_name="nvidia/nemotron-3.5-asr-streaming-0.6b")`
-      resolves the HF id** and returns that prompt-capable class — and that
-      `EncDecRNNTBPEModelWithPrompt.restore_from(<local .nemo>)` works for
-      the pre-downloaded file path.
-- [ ] **fp32 vs AMP.** Cache-aware NeMo models are documented as
-      float32-only, with bf16/fp16 reachable only through `torch.autocast`.
-      `options.amp: false` is the default. Measure both: does
-      `amp: true` change VRAM, latency, or transcript quality? Does it
-      produce NaNs or silently degrade?
-- [ ] **Per-step latency at `att_context_size: [56, 6]` (560 ms chunks).**
-      A step must complete in well under 560 ms of wall time per stream for
-      one session to keep up with real time. Measure it, and measure the
-      80 ms (`[56, 0]`) and 320 ms (`[56, 3]`) settings for the
-      latency/accuracy trade-off.
-- [ ] **Concurrency ceiling.** The backend holds a process-wide lock around
-      `set_inference_prompt(...)` + the model step (the prompt is
-      model-global and CUDA calls are not thread-safe), so the executor's
-      `max_concurrent: 8` does not buy 8x throughput. Find the real ceiling
-      and correct `limits.max_sessions` / the docs to match.
-- [ ] **zh-CN accuracy.** NVIDIA places zh-CN in the "broad-coverage" tier
-      (FLEURS CER ~19-20%) versus "transcription-ready" en-US. Does the
-      measured CER on real Mandarin land anywhere near that? If it is much
-      worse in streaming mode, say so in `docs/backends.md` and keep
-      pointing Mandarin-only users at FunASR.
-- [ ] **Automatic language ID actually works per utterance**, and the
-      `<xx-XX>` tag really appears in the model's output text so
-      `strip_lang_tags` / detected-locale reporting has something to parse.
-      Mixed zh+en traffic on one server is the requirement this backend
-      exists for.
-- [ ] **Explicit per-request language overrides the config default** via the
-      file endpoint's `language` form field, for both `zh`/`zh-CN` and
-      `en`/`en-US` spellings.
-- [ ] **Final flush keeps the utterance tail.** `finalize()` zero-pads the
-      buffer remainder to a full chunk and asks for `keep_all_outputs=True`;
-      confirm no trailing words are lost when `input_done` arrives with no
-      trailing silence (validator case `*-final-flush`).
-- [ ] **MPS / CPU support.** `device: cpu` and `device: mps` are accepted by
-      the constructor but have never been run. Either verify them (and
-      record how far below real time CPU is), or state plainly in the docs
-      that they are unsupported.
+- [x] **`nemo_toolkit>=3.0.0` from PyPI contains `EncDecRNNTBPEModelWithPrompt`**
+      at `nemo.collections.asr.models.rnnt_bpe_models_prompt`. **CONFIRMED**
+      (nemo 3.0.0 wheel; §2 snippet runs clean).
+- [x] **`ASRModel.from_pretrained(...)` resolves the HF id** and returns the
+      prompt-capable class, and `restore_from(<local .nemo>)` works.
+      **CONFIRMED — both paths exercised** (HF cache pre-seeded at revision
+      `1c8deae…`; server/benchmarks used the local `.nemo`).
+- [x] **fp32 vs AMP.** **fp32 wins on A10.** `amp: true`: identical
+      transcripts, no NaNs, same ~2.9 GiB resident VRAM, but per-step
+      44.2 ms vs 34.8 ms fp32 (+27%). Keep `amp: false`.
+- [x] **Per-step latency.** `[56,0]` 31.4 ms / 80 ms chunk (RTF 0.39);
+      `[56,3]` 34.4 / 320 (0.11); `[56,6]` 34.8 / 560 (0.06); `[56,13]`
+      36.5 / 1120 (0.03). All real-time-safe per stream; the 560 ms default
+      has ~16× headroom.
+- [x] **Concurrency ceiling.** **16** concurrent 5 s streams pass a 2 s p95
+      SLO with 0 drops (20 fails: p95 3.25 s). GPU util plateaus at 37% —
+      the process-wide lock, not the GPU, is the limiter. Shipped
+      `limits.max_sessions: 8` kept conservative (p95 290 ms there, ~7×
+      margin); see `configs/nemotron.yaml`'s comment.
+- [x] **zh-CN accuracy.** CER **0.00%** on clean natural TTS (smoke signal
+      only — no Mandarin corpus runner exists). en test-clean WER 3.74%
+      (n=100). Neither confirms nor contradicts NVIDIA's tiering.
+- [x] **Automatic language ID.** **WORKS**: the `<xx-XX>` tag appears in
+      streaming hypotheses and detected `Chinese`/`English` is reported on
+      the FINAL. Caveat: needs a few seconds of speech — the tag never
+      appears on the 1 s fixture (model test adjusted accordingly).
+- [x] **Explicit per-request language.** **WORKS** for `zh`/`en` via the
+      file endpoint (perfect transcripts); wrong-language prompts on clear
+      foreign speech yield empty/gibberish, never crashes.
+- [x] **Final flush keeps the utterance tail.** **CONFIRMED** — zh/en tails
+      intact with no trailing silence; the pinned model test passes.
+- [x] **MPS / CPU support.** **CPU works better than documented**: RTF
+      **0.37** (2.7× faster than real time) at concurrency 1 on 8 vCPU —
+      docs updated. MPS remains unverifiable on Linux.
+
+## 11. Troubleshooting (findings from the A10 bring-up)
+
+- **`RuntimeError: CUDNN_BACKEND_TENSOR_DESCRIPTOR cudnnFinalize failed …
+  CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` on every conv2d.** The box has
+  CUDA toolkits (`/usr/local/cuda-12.8`, `/usr/local/cuda-13.0`) whose
+  cuDNN 9.19.1 libraries are registered in `ldconfig`; torch 2.14.0+cu130
+  bundles cuDNN 9.24 (`nvidia_cudnn_cu13` wheel in the venv). The main
+  lib loads from the wheel but the lazily-loaded graph/ops sublibraries
+  resolve to the system 9.19.1 copies → version mismatch. This makes the
+  backend's own warmup fail (logged `nemotron.warmup_failed`, swallowed by
+  design) and the first real decode raise. **Fix:** prefix `LD_LIBRARY_PATH`
+  with the venv's cuDNN dir for every GPU command:
+
+  ```bash
+  export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  ```
+
+  Verify with a bare conv2d before touching the server. A stock box with
+  only the driver installed (no toolkit) does not hit this.
+- **Empty transcripts for a clip that should decode** — before blaming the
+  backend, check the audio source: espeak-ng Mandarin decodes to empty in
+  every language mode (measured). Use edge-tts per §6.
+- **`hf_hub_download` re-downloads the 2.37 GB model in tests even though
+  `models/` has it** — the model tests construct `NemotronBackend()` with
+  the HF id, which uses the HF cache, not `models/`. Pre-seed the cache
+  (blob copy + `refs/main` at the repo revision from the HF API) or just
+  let the first `start()` fetch it once with `HF_ENDPOINT` set.

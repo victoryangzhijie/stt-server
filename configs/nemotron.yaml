@@ -10,9 +10,9 @@
 # tier, FLEURS CER ~19-20%, while en-US is "transcription-ready"); this
 # profile's value is one model, one GPU, mixed zh+en traffic.
 #
-# NOT run/verified anywhere yet — see docs/backends.md#nemotron for the
-# honest verified-on note and docs/nemotron_a10_runbook.md for the A10
-# bring-up procedure that is meant to close that gap.
+# Verified on an NVIDIA A10 (2026-09-06): see NEMOTRON_A10_VERIFICATION_REPORT.md
+# and docs/backends.md#nemotron for the measured numbers (WER 3.74% test-clean,
+# concurrency ceiling 16 @ 2 s p95 SLO, fp32 resident ~2.9 GiB).
 server:
   host: 0.0.0.0
   port: 8000
@@ -48,8 +48,9 @@ backends:
       # decode step, the model card's recommended accuracy/latency balance
       # Only the four right-context values the checkpoint was trained
       # with are accepted: 0/3/6/13 -> 80/320/560/1120 ms. Lower it to 3
-      # (320 ms) or 0 (80 ms) to trade accuracy for latency; every value
-      # is UNVERIFIED on real hardware.
+      # (320 ms) or 0 (80 ms) to trade accuracy for latency; all four
+      # measured on the A10 (per-step 31-37 ms, all real-time-safe per
+      # stream — see NEMOTRON_A10_VERIFICATION_REPORT.md).
       att_context_size: [56, 6]
       # null (or "auto") => automatic per-utterance language identification,
       # so a single server handles mixed zh + en traffic and reports the
@@ -63,12 +64,13 @@ backends:
       strip_lang_tags: true
       # "cuda", "cuda:N", or "cpu". Weights and caches run in fp32 (NeMo's
       # docs describe cache-aware models as fp32, with bf16/fp16 only via
-      # AMP; the 3.0.0 wheel has no hard check for this, so it is UNVERIFIED).
-      # CPU and MPS are UNVERIFIED and expected to be far slower than real time.
+      # AMP). CPU measured on the A10 box (2026-09): RTF 0.37 at
+      # concurrency 1 — usable, ~2.7x faster than real time. MPS remains
+      # unverified (no Apple hardware).
       device: cuda
-      # torch.autocast(bfloat16) around the encoder step. UNVERIFIED — left
-      # off so the default profile runs the model exactly as NeMo intends
-      # (fp32). Flip to true on the A10 only after a measured comparison.
+      # torch.autocast(bfloat16) around the encoder step. Measured on the
+      # A10: identical transcripts and VRAM but +27% per-step time vs fp32,
+      # so the default stays off.
       amp: false
       # Size of the backend's shared ThreadPoolExecutor (the NeMo step call
       # is a synchronous, blocking torch call), mirroring `max_concurrent`
@@ -82,9 +84,10 @@ backends:
 # max_concurrent decode pool. NOTE: the backend also holds a process-wide lock
 # around each model step (the language prompt is set model-globally and CUDA
 # calls are not thread-safe), so real concurrency is bounded by step time, not
-# by pool size — the A10 concurrency ceiling is one of the UNVERIFIED items in
-# docs/nemotron_a10_runbook.md. Also bounded per-request by
-# max_session_seconds, enforced for file uploads in
+# by pool size. Measured on the A10: 16 concurrent 5 s streams pass a 2 s p95
+# SLO with 0 drops (20 fails); 8 is kept deliberately conservative — p95
+# 290 ms there, ~7x SLO margin (NEMOTRON_A10_VERIFICATION_REPORT.md). Also
+# bounded per-request by max_session_seconds, enforced for file uploads in
 # src/stt_server/api/transcriptions_http.py.
 limits:
   max_sessions: 8

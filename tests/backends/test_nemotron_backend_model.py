@@ -139,9 +139,13 @@ async def test_real_model_streams_incremental_partials_and_one_final():
         events = await _stream_utterance(backend, _speech_fixture())
         text = _assert_clean_final(events)
         finals = [e for e in events if e.kind == "final"]
-        # Default profile is auto language ID: the model must have emitted a
-        # `<xx-XX>` tag for the adapter to report a detected language.
-        assert finals[0].language is not None, "auto mode reported no detected language"
+        # The 1 s fixture is too short for the model to commit a language
+        # decision: on the A10 bring-up (2026-09) the `<xx-XX>` tag never
+        # appeared on it, in any of auto/zh-CN/en-US, while the 6 s
+        # zh/en_sample.wav clips emit it reliably (pinned by
+        # test_auto_detects_zh). Language detection therefore needs a few
+        # seconds of speech; asserting it here would fail on a clip too
+        # short to exercise it.
         print(f"\n[nemotron real transcript, en fixture] {text!r} ({finals[0].language})\n")
     finally:
         await backend.stop()

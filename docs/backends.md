@@ -205,7 +205,7 @@ owns its own concurrency model rather than the core imposing one:
 | sherpa-onnx | dedicated `ThreadPoolExecutor` | onnxruntime releases the GIL during inference, so a thread pool gets real parallelism; native calls are synchronous |
 | FunASR | bounded `ThreadPoolExecutor` | `model.generate(...)` is a synchronous, blocking torch call |
 | Qwen3-ASR | bounded `ThreadPoolExecutor` (not an async engine) | verified against the real framework source: `Qwen3ASRModel.LLM(...)` wraps vLLM's **synchronous, blocking** `LLM` class, not `AsyncLLMEngine` — see the module docstring in `qwen3asr/backend.py` for the full research trail. The original plan's assumption that vLLM's async engine could be awaited in-loop with an `asyncio.Semaphore` turned out to be wrong; the adapter uses the executor pattern instead, with `max_concurrent` sized as `pool_workers` in the other two backends |
-| Nemotron | bounded `ThreadPoolExecutor` **plus a process-wide step lock** | the NeMo cache-aware step is a synchronous blocking torch call, so it goes on an executor sized by `max_concurrent` like the others — but the language prompt is set *model-globally* (`set_inference_prompt`) and CUDA model calls are not thread-safe, so a cross-stream `threading.Lock` wraps prompt-set + step together. Per-stream state (encoder cache, decoder hypotheses) is still fully isolated; the shared lock bounds throughput, not correctness, which is why the real concurrency ceiling is an open question (see `docs/nemotron_a10_runbook.md`) |
+| Nemotron | bounded `ThreadPoolExecutor` **plus a process-wide step lock** | the NeMo cache-aware step is a synchronous blocking torch call, so it goes on an executor sized by `max_concurrent` like the others — but the language prompt is set *model-globally* (`set_inference_prompt`) and CUDA model calls are not thread-safe, so a cross-stream `threading.Lock` wraps prompt-set + step together. Per-stream state (encoder cache, decoder hypotheses) is still fully isolated; the shared lock bounds throughput, not correctness. Measured on the A10 (2026-09): **16** concurrent 5 s streams pass a 2 s p95 SLO with 0 drops before the lock's queueing breaks the SLO (GPU util only ~37%) — see `NEMOTRON_A10_VERIFICATION_REPORT.md` |
 
 Rule of thumb for a new backend: if the underlying inference call is a
 synchronous/blocking Python call (true of essentially every ONNX/torch/CTranslate2-style
@@ -474,16 +474,18 @@ Every profile below lives at `configs/<name>.yaml` and is runnable as
   per-stream: each `NemotronStream` owns its own encoder cache
   (`cache_last_channel`, `cache_last_time`, `cache_last_channel_len`) and
   decoder state, so sessions never contaminate each other. See §2.5.
-- **Verified on: NOT RUN.** This backend has never executed against a real
-  model on real hardware — no CUDA GPU in this development environment. The
-  implementation and its tests were written against the model card and the
-  NeMo API surface, not against a running model. Do not read "written" as
-  "verified": the class name in the installed wheel, the HF-id
-  `from_pretrained` path, fp32-vs-AMP behavior, the real per-step latency at
-  560 ms, the concurrency ceiling, and the measured zh CER are all still
-  open. [`docs/nemotron_a10_runbook.md`](nemotron_a10_runbook.md) is the
-  procedure that closes this gap, and its §10 is the full UNVERIFIED
-  checklist.
+- **Verified on: NVIDIA A10, 2026-09-06** — full report in
+  [`NEMOTRON_A10_VERIFICATION_REPORT.md`](../NEMOTRON_A10_VERIFICATION_REPORT.md).
+  Headlines: model suite 10/10; en test-clean **WER 3.74%** (n=100, ws &
+  file, 0 drops); zh/en TTS CER/WER 0.00% with **per-utterance auto
+  language ID confirmed** (the `<xx-XX>` tag needs a few seconds of speech
+  to appear); server-final p95 **42 ms**; per-step 31–37 ms at all four
+  context sizes (560 ms default has ~16× real-time headroom); concurrency
+  ceiling **16** concurrent 5 s streams at a 2 s p95 SLO with 0 drops
+  (lock-bound; GPU util ~37%); resident VRAM **2.9 GiB** fp32; `amp: true`
+  measurably slower (+27%/step) with identical quality and VRAM. One
+  box-level environment note (system-cuDNN vs torch-cuDNN clash → `LD_LIBRARY_PATH`
+  prefix) is in the runbook's §11.
 - **Language handling (zh + en, and 38 more).** This is the only backend
   here that serves Chinese and English from one streaming model:
   - `language: null` (the shipped default) means **automatic per-utterance
@@ -506,14 +508,15 @@ Every profile below lives at `configs/<name>.yaml` and is runnable as
     remains the better choice; nemotron's value is one streaming model, one
     GPU, zh + en (+38) with auto language ID.
 
-- **Unverified paths.** Beyond the "NOT RUN" note above, these are
-  specifically untested code paths rather than unmeasured numbers:
-  `device: cpu` and `device: mps` (accepted by the constructor, never run,
-  and expected to be far below real time on CPU); `amp: true` (the
-  `torch.autocast` bf16 encoder path, off by default because cache-aware
-  NeMo models are documented as float32-only); `att_context_size` values
-  other than `[56, 6]`; and loading from a local `.nemo` path via
-  `restore_from` rather than the HF id.
+- **Less-verified paths.** Measured once on the A10 (2026-09) but not
+  under production traffic: `device: cpu` (works — RTF 0.37 at concurrency
+  1 on 8 vCPU, i.e. ~2.7× faster than real time; do not extrapolate to
+  multi-stream load); `amp: true` (same quality/VRAM, +27% step time on
+  A10 — keep the fp32 default); `att_context_size` values other than
+  `[56, 6]` (all four trained values measured per-step; `[56, 6]` stays
+  the default); loading from a local `.nemo` path via `restore_from`
+  (verified, same class). `device: mps` remains unverified (no Apple
+  hardware in the bring-up).
 
 #### Streaming internals
 
@@ -643,17 +646,15 @@ NVIDIA's live service. `compute_timestamps` and `preserve_alignments` stay
 `False`: this backend reads `hyp.text`, and alignments grow unboundedly over
 a long utterance.
 
-**Still unverified after all of the above** (nothing here has run on real
-hardware): that the published wheel behaves as its source reads; the
-numeric equivalence of chunk-wise vs whole-utterance features (the 320-sample
-argument is sound for the STFT, but the mel+log path was never diffed);
-`greedy.use_cuda_graph_decoder` (default `True`) interacting with per-stream
-`partial_hypotheses` under the shared lock — turn it off first if concurrent
-streams contaminate each other; per-step latency and the real concurrency
-ceiling under the global lock; the warm-up cost; and whether the `<xx-XX>`
-tag actually appears in streaming output at all, which is what the whole
-detected-language path depends on. See
-[`docs/nemotron_a10_runbook.md`](nemotron_a10_runbook.md) §10.
+**Verified on the A10 (2026-09-06):** the published wheel behaves as its
+source reads; per-step latency 31–37 ms at all four context sizes (see the
+"Verified on" note above); the warm-up costs ~2 of the 54 s boot; the
+`<xx-XX>` tag does appear in streaming output (needs a few seconds of
+speech); 4 concurrent interleaved zh/en streams decoded cleanly with
+`use_cuda_graph_decoder` left at its default. **Still unverified:** the
+numeric equivalence of chunk-wise vs whole-utterance features (the
+320-sample look-back argument is sound for the STFT, but the mel+log path
+was never diffed against a full-utterance decode).
 
 
 ## 5. Known limitations
