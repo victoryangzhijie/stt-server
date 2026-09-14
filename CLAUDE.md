@@ -22,6 +22,7 @@ uv run stt-server --config configs/mock.yaml
 # Real-model tests (deselected by default via addopts = "-m 'not model'")
 uv run --extra sherpa pytest -m model tests/backends/test_sherpa_backend_model.py
 uv run pytest -m "model and gpu" tests/backends/test_qwen3asr_backend_model.py  # needs CUDA
+uv run pytest -m "model and gpu" tests/backends/test_nemotron_backend_model.py  # needs CUDA
 
 # Download model weights / corpus (both land in gitignored dirs)
 uv run python scripts/download_models.py <name|all>
@@ -63,7 +64,7 @@ Invariants that tests pin and reviews have repeatedly defended:
 
 ### Backends (src/stt_server/backends/)
 
-Plugin contract in `base.py`; registration via `@register_backend("<type>")` + import in `backends/__init__.py`. Four backends: `mock` (always available; scripted, deterministic), `sherpa_onnx`, `funasr`, `qwen3asr` — the real three live behind optional extras and follow an identical hardened template (read `sherpa/backend.py` first; it is the canonical example):
+Plugin contract in `base.py`; registration via `@register_backend("<type>")` + import in `backends/__init__.py`. Five backends: `mock` (always available; scripted, deterministic), `sherpa_onnx`, `funasr`, `qwen3asr`, `nemotron` (NeMo cache-aware streaming FastConformer; zh+en+38 locales with auto language ID; verified on an A10 — see `NEMOTRON_A10_VERIFICATION_REPORT.md` and `docs/nemotron_a10_runbook.md`) — the real four live behind optional extras and follow an identical hardened template (read `sherpa/backend.py` first; it is the canonical example):
 - Lazy imports: `importlib.util.find_spec` gate in `__init__` raising `BackendUnavailableError` with a `pip install 'stt-server[<extra>]'` hint; heavy imports only inside methods. `import stt_server.backends` must never pull sherpa/torch/vllm/onnx.
 - Per-stream `asyncio.Lock` serializing decode+enqueue with a `_done` recheck inside the lock; lock-aware idempotent `close()`; `finalize()` flips `_done` *before* taking the lock (that flag, not lock scope, guarantees its ordering).
 - Sync engines decode on a shared `ThreadPoolExecutor` via `run_in_executor`; `stop()` shuts it down via `await asyncio.to_thread(...)` (never block the loop). Qwen3-ASR uses the `qwen-asr` package's native streaming API over vLLM's **synchronous** `LLM` class (the design spec's async-engine assumption is superseded — see the module docstring).
@@ -83,11 +84,11 @@ Runners (`run_accuracy`, `run_load`, `run_stabilizer_study`, `run_endpointing`) 
 
 ## Testing conventions
 
-- CI (and the default env) is ML-free: heavy deps live behind extras (`sherpa`, `funasr`, `qwen3asr`, `silero`, `bench`); tests needing them use `@pytest.mark.model` / `@pytest.mark.gpu` or `pytest.importorskip`. CI runs `uv sync --frozen`.
+- CI (and the default env) is ML-free: heavy deps live behind extras (`sherpa`, `funasr`, `qwen3asr`, `nemotron`, `silero`, `bench`); tests needing them use `@pytest.mark.model` / `@pytest.mark.gpu` or `pytest.importorskip`. CI runs `uv sync --frozen`.
 - macOS 12 local quirks: newest sherpa-onnx wheels fail (`pin sherpa-onnx==1.10.46`), `onnxruntime>=1.20` uninstallable (venv-pin 1.19.2), torch capped at 2.2.x — throwaway venvs in the session scratchpad handle real-model testing; `pyproject.toml` constraints target deployment, not this box.
 - `tests/conftest.py` has an autouse fixture resetting all labeled metrics between tests — new labeled metric families must be added to its `_LABELED_METRICS` tuple.
 - Don't commit model weights, corpus audio, or `benchmarks/results/` JSONs. The one committed audio fixture (`tests/fixtures/speech_16k_mono_s16le.pcm`) has documented provenance in `tests/fixtures/README.md` — any new third-party fixture needs the same treatment (this is a public Apache-2.0 repo).
 
 ## Project history / docs
 
-Built via spec → 4 sequential implementation plans, all under `docs/superpowers/` (design spec + plan docs). `docs/architecture.md` has the component diagrams. Known deferred work: Plan 4 Task 9 (full CPU benchmark report — partial results and resume commands in `.superpowers/sdd/p4-task-9-report.md`), the CUDA-box GPU run, and creating a GitHub remote (CI has never run remotely).
+Built via spec → 4 sequential implementation plans, all under `docs/superpowers/` (design spec + plan docs). `docs/architecture.md` has the component diagrams. Known deferred work: Plan 4 Task 9 (full CPU benchmark report — partial results and resume commands in `.superpowers/sdd/p4-task-9-report.md`) and creating a GitHub remote (CI has never run remotely). The CUDA-box GPU run is done for both GPU backends (qwen3asr: `GPU_VERIFICATION_REPORT.md`; nemotron: `NEMOTRON_A10_VERIFICATION_REPORT.md`).

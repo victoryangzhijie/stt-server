@@ -31,12 +31,19 @@ def _funasr_backend_cls():
     return FunasrBackend
 
 
+def _nemotron_backend_cls():
+    from stt_server.backends.nemotron.backend import NemotronBackend
+
+    return NemotronBackend
+
+
 @pytest.mark.parametrize(
     ("config_path", "backend_key", "backend_type", "cls_factory"),
     [
         ("configs/mock.yaml", "mock", "mock", _mock_backend_cls),
         ("configs/sherpa.yaml", "sherpa", "sherpa_onnx", _sherpa_backend_cls),
         ("configs/funasr.yaml", "funasr", "funasr", _funasr_backend_cls),
+        ("configs/nemotron.yaml", "nemotron", "nemotron", _nemotron_backend_cls),
     ],
 )
 def test_config_options_are_a_subset_of_the_backend_constructor_signature(

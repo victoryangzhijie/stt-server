@@ -67,6 +67,46 @@ def _prewarm_funasr_paraformer_zh_streaming() -> None:
     AutoModel(model="paraformer-zh-streaming")
 
 
+NEMOTRON_REPO_ID = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+NEMOTRON_FILENAME = "nemotron-3.5-asr-streaming-0.6b.nemo"
+NEMOTRON_DIR = MODELS_DIR / "nemotron-3.5-asr-streaming-0.6b"
+
+
+def _prewarm_nemotron_streaming_0_6b() -> None:
+    """Download `nemotron-3.5-asr-streaming-0.6b.nemo` (~2.37 GB) from the
+    Hugging Face Hub into `models/nemotron-3.5-asr-streaming-0.6b/`.
+
+    A `prewarm` entry rather than a plain `urlretrieve` one because the Hub
+    file lives behind a redirect chain that `huggingface_hub` already
+    handles (resume, checksum, `HF_ENDPOINT` mirrors) and because the same
+    library is what NeMo itself uses at `from_pretrained()` time — going
+    through it keeps the mirror configuration in exactly one place.
+
+    `HF_ENDPOINT` is honored automatically: `huggingface_hub` reads it into
+    its endpoint constant at import time, so
+    `HF_ENDPOINT=https://hf-mirror.com python scripts/download_models.py
+    nemotron-3.5-asr-streaming-0.6b` fetches from the mirror. The import is
+    deferred to this function body so the script stays stdlib-only and
+    runnable (`all`, other artifacts) without `huggingface_hub` installed.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is not installed; pip install huggingface_hub "
+            "(or pip install 'stt-server[nemotron]', which pulls it in via "
+            "nemo_toolkit) before downloading nemotron-3.5-asr-streaming-0.6b"
+        ) from exc
+
+    NEMOTRON_DIR.mkdir(parents=True, exist_ok=True)
+    path = hf_hub_download(
+        repo_id=NEMOTRON_REPO_ID,
+        filename=NEMOTRON_FILENAME,
+        local_dir=str(NEMOTRON_DIR),
+    )
+    print(f"[hf] {NEMOTRON_REPO_ID}/{NEMOTRON_FILENAME} -> {path}")
+
+
 REGISTRY: dict[str, Artifact] = {
     "silero": Artifact(
         name="silero",
@@ -97,6 +137,20 @@ REGISTRY: dict[str, Artifact] = {
         dest=MODELS_DIR / ".funasr-paraformer-zh-streaming.prewarmed",
         min_size_bytes=0,
         prewarm=_prewarm_funasr_paraformer_zh_streaming,
+    ),
+    "nemotron-3.5-asr-streaming-0.6b": Artifact(
+        name="nemotron-3.5-asr-streaming-0.6b",
+        url=(
+            f"https://huggingface.co/{NEMOTRON_REPO_ID}/resolve/main/{NEMOTRON_FILENAME}"
+            "  (informational only — see `prewarm` below; fetched via "
+            "huggingface_hub so HF_ENDPOINT mirrors work)"
+        ),
+        # `prewarm` writes the real file here, so this doubles as the
+        # idempotency marker: a second run sees the .nemo already on disk
+        # and skips without re-hitting the Hub.
+        dest=NEMOTRON_DIR / NEMOTRON_FILENAME,
+        min_size_bytes=0,
+        prewarm=_prewarm_nemotron_streaming_0_6b,
     ),
     # Future entries (added by later tasks): "paraformer-en", ...
 }

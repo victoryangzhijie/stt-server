@@ -41,7 +41,7 @@ git clone <this repo> && cd sst-server
 bash scripts/run_gpu_suite.sh
 ```
 
-Runs all 7 phases in order; see the script's header comment for the
+Runs all 8 phases in order; see the script's header comment for the
 `SKIP_*=1` env flags that make each phase independently skippable (useful
 for re-running just the phase that failed, without repeating slow ones like
 the Docker builds). The `UV_DEFAULT_INDEX="https://pypi.org/simple"` prefix
@@ -62,9 +62,21 @@ needs.
 | 5 | accuracy run vs qwen3asr | `benchmarks/results/accuracy-qwen3-asr-0.6b-test-clean-<timestamp>.json` | minutes-to-~2h — **real-time paced** (see methodology note below): 100 utterances at `--pace 1.0` means the WS pass alone takes roughly the corpus's total audio duration (`test-clean`'s 100-utterance sample is on the order of 10-20 minutes of audio), plus file-mode and per-utterance server-boot/teardown overhead |
 | 6 | load run vs qwen3asr | `benchmarks/results/load-qwen3-asr-0.6b-<timestamp>.json` | up to `--max`/`--step` rungs × `--window-seconds` each (script's defaults: up to 8 rungs × 30s = ~4 min, plus per-rung server/model boot) |
 | 7 | funasr zero-length `is_final=True` check | stdout `[ok] ...` line (no JSON artifact) | seconds, plus a one-time `paraformer-zh-streaming` model download if not already cached (see `scripts/download_models.py`) |
+| 8 | nemotron model+gpu tests, then a `run_load` ramp against `configs/nemotron.yaml` (`nemotron-3.5-asr-streaming-0.6b`) | pytest output; `benchmarks/results/load-nemotron-3.5-asr-streaming-0.6b-<timestamp>.json` | 5-20 min, plus a one-time ~2.4 GB `.nemo` download. Prints `[skip]` and moves on when the `nemotron` extra isn't installed (phase 1's `uv sync` does not include it) |
 
-Phases 5/6 write into `benchmarks/results/`, which is **gitignored** (see
+Phases 5/6/8 write into `benchmarks/results/`, which is **gitignored** (see
 `benchmarks/README.md`) — nothing there is committed automatically.
+
+**Phase 8 (nemotron) is not self-contained.** It only runs the automatable
+slice: the model+GPU pytest and one load ramp. The `nemotron` backend has
+never executed on real hardware at all, so the full bring-up — system
+packages (`libsndfile1 ffmpeg`), installing the extra without touching
+`uv.lock`, the `.nemo` and silero downloads, the zh+en validation run via
+`scripts/validate_nemotron_a10.py`, what numbers to record, and the
+UNVERIFIED checklist to work through — lives in
+[`docs/nemotron_a10_runbook.md`](../docs/nemotron_a10_runbook.md). Read that
+before running phase 8, or it will simply print `[skip]` for a missing
+extra.
 
 ## Methodology constraint (binding — carried from Plan 4 Task 7)
 

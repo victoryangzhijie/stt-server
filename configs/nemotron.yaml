@@ -1,0 +1,96 @@
+# Multilingual GPU streaming profile: NVIDIA Nemotron 3.5 ASR Streaming 0.6B
+# (cache-aware FastConformer encoder + RNNT decoder + a language-prompt
+# vector). Requires a CUDA GPU and the `nemotron` extra
+# (`nemo_toolkit[asr]>=3.0.0`).
+#
+# Why this profile exists: it is the only backend in this repo that serves
+# Chinese AND English (plus 38 more locales) from ONE streaming model, with
+# per-utterance automatic language identification. FunASR remains the better
+# choice for Mandarin-only accuracy (zh-CN sits in NVIDIA's "broad-coverage"
+# tier, FLEURS CER ~19-20%, while en-US is "transcription-ready"); this
+# profile's value is one model, one GPU, mixed zh+en traffic.
+#
+# Verified on an NVIDIA A10 (2026-09-06): see NEMOTRON_A10_VERIFICATION_REPORT.md
+# and docs/backends.md#nemotron for the measured numbers (WER 3.74% test-clean,
+# concurrency ceiling 16 @ 2 s p95 SLO, fp32 resident ~2.9 GiB).
+server:
+  host: 0.0.0.0
+  port: 8000
+vad:
+  # silero, same rationale as configs/sherpa.yaml and configs/qwen3asr.yaml:
+  # pair a production ASR backend with production-quality endpointing. The
+  # backend has no native endpointing (native_endpointing=False), so the
+  # server's VAD + endpointer decide utterance boundaries.
+  kind: silero
+  model_path: models/silero_vad.onnx
+  threshold: 0.5
+endpointing:
+  pre_roll_ms: 300
+  min_silence_ms: 500
+  max_utterance_ms: 30000
+stabilizer:
+  min_partials: 2
+  min_stable_ms: 400.0
+backends:
+  nemotron:
+    type: nemotron
+    options:
+      # HF repo id (pulled by NeMo's own `from_pretrained` on first
+      # backend.start()) or a local `.nemo` path. To pre-download the
+      # 2.37 GB `.nemo` file into models/ instead:
+      #   uv run python scripts/download_models.py nemotron-3.5-asr-streaming-0.6b
+      # then point this at
+      #   models/nemotron-3.5-asr-streaming-0.6b/nemotron-3.5-asr-streaming-0.6b.nemo
+      model: nvidia/nemotron-3.5-asr-streaming-0.6b
+      # Cache-aware attention context [left, right] in encoder output frames.
+      # The encoder subsamples 8x, so one output frame is 80 ms of audio and
+      # the streaming chunk is (right + 1) * 80 ms. right=6 -> 560 ms per
+      # decode step, the model card's recommended accuracy/latency balance
+      # Only the four right-context values the checkpoint was trained
+      # with are accepted: 0/3/6/13 -> 80/320/560/1120 ms. Lower it to 3
+      # (320 ms) or 0 (80 ms) to trade accuracy for latency; all four
+      # measured on the A10 (per-step 31-37 ms, all real-time-safe per
+      # stream — see NEMOTRON_A10_VERIFICATION_REPORT.md).
+      att_context_size: [56, 6]
+      # null (or "auto") => automatic per-utterance language identification,
+      # so a single server handles mixed zh + en traffic and reports the
+      # detected locale on the FINAL event. Set to a locale ("zh-CN",
+      # "en-US") to pin the language prompt instead; the OpenAI file
+      # endpoint's `language` form field overrides this per request.
+      language: null
+      # The model emits a `<xx-XX>` locale tag in its output text; strip it
+      # from the transcript (the detected locale is still reported
+      # separately). Set false only if a client wants the raw tagged text.
+      strip_lang_tags: true
+      # "cuda", "cuda:N", or "cpu". Weights and caches run in fp32 (NeMo's
+      # docs describe cache-aware models as fp32, with bf16/fp16 only via
+      # AMP). CPU measured on the A10 box (2026-09): RTF 0.37 at
+      # concurrency 1 — usable, ~2.7x faster than real time. MPS remains
+      # unverified (no Apple hardware).
+      device: cuda
+      # torch.autocast(bfloat16) around the encoder step. Measured on the
+      # A10: identical transcripts and VRAM but +27% per-step time vs fp32,
+      # so the default stays off.
+      amp: false
+      # Size of the backend's shared ThreadPoolExecutor (the NeMo step call
+      # is a synchronous, blocking torch call), mirroring `max_concurrent`
+      # in configs/qwen3asr.yaml and `pool_workers` in the other backends.
+      max_concurrent: 8
+      # One throwaway silence decode at start() so the first real request
+      # does not pay CUDA graph/kernel autotune cost.
+      warmup: true
+# Capacity cap (spec §13). Acquiring a session beyond max_sessions returns 429
+# immediately instead of queueing on the GPU. Sized to the backend's
+# max_concurrent decode pool. NOTE: the backend also holds a process-wide lock
+# around each model step (the language prompt is set model-globally and CUDA
+# calls are not thread-safe), so real concurrency is bounded by step time, not
+# by pool size. Measured on the A10: 16 concurrent 5 s streams pass a 2 s p95
+# SLO with 0 drops (20 fails); 8 is kept deliberately conservative — p95
+# 290 ms there, ~7x SLO margin (NEMOTRON_A10_VERIFICATION_REPORT.md). Also
+# bounded per-request by max_session_seconds, enforced for file uploads in
+# src/stt_server/api/transcriptions_http.py.
+limits:
+  max_sessions: 8
+  max_session_seconds: 300.0
+models:
+  nemotron-3.5-asr-streaming-0.6b: nemotron
